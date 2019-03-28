@@ -424,6 +424,11 @@ func containerChanged(container *v1.Container, containerStatus *kubecontainer.Co
 	return expectedHash, containerStatus.Hash, containerStatus.Hash != expectedHash
 }
 
+func containerChangedWithPod(pod *v1.Pod, container *v1.Container, containerStatus *kubecontainer.ContainerStatus) (uint64, uint64, bool) {
+	expectedHash := kubecontainer.HashContainerByPodVersion(pod, container)
+	return expectedHash, containerStatus.Hash, containerStatus.Hash != expectedHash
+}
+
 func shouldRestartOnFailure(pod *v1.Pod) bool {
 	return pod.Spec.RestartPolicy != v1.RestartPolicyNever
 }
@@ -518,7 +523,8 @@ func (m *kubeGenericRuntimeManager) computePodActions(pod *v1.Pod, podStatus *ku
 		// The container is running, but kill the container if any of the following condition is met.
 		reason := ""
 		restart := shouldRestartOnFailure(pod)
-		if expectedHash, actualHash, changed := containerChanged(&container, containerStatus); changed {
+		//if expectedHash, actualHash, changed := containerChanged(&container, containerStatus); changed {
+		if expectedHash, actualHash, changed := containerChangedWithPod(pod, &container, containerStatus); changed {
 			reason = fmt.Sprintf("Container spec hash changed (%d vs %d).", actualHash, expectedHash)
 			// Restart regardless of the restart policy because the container
 			// spec changed.
