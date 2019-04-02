@@ -33,6 +33,7 @@ const (
 	ConfigFirstSeenAnnotationKey = "kubernetes.io/config.seen"
 	ConfigHashAnnotationKey      = "kubernetes.io/config.hash"
 	CriticalPodAnnotationKey     = "scheduler.alpha.kubernetes.io/critical-pod"
+	KUBELETROOTDIR               = "kubernetes.io/root.directory"
 )
 
 // PodOperation defines what changes will be made on a pod configuration.

@@ -1494,6 +1494,9 @@ func (kl *Kubelet) syncPod(o syncPodOptions) error {
 		firstSeenTime = kubetypes.ConvertToTimestamp(firstSeenTimeStr).Get()
 	}
 
+	// @leo Set kubelet root dir
+	pod.Annotations[kubetypes.KUBELETROOTDIR] = kl.rootDirectory
+
 	// Record pod worker start latency if being created
 	// TODO: make pod workers record their own latencies
 	if updateType == kubetypes.SyncPodCreate {
