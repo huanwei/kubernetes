@@ -24,7 +24,7 @@ import (
 	"time"
 
 	authenticationv1 "k8s.io/api/authentication/v1"
-	"k8s.io/api/core/v1"
+	v1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/types"
@@ -32,18 +32,19 @@ import (
 	"k8s.io/apimachinery/pkg/util/wait"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	coreinformers "k8s.io/client-go/informers/core/v1"
+	storageinformersv1 "k8s.io/client-go/informers/storage/v1"
 	storageinformers "k8s.io/client-go/informers/storage/v1beta1"
 	clientset "k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/scheme"
 	v1core "k8s.io/client-go/kubernetes/typed/core/v1"
 	corelisters "k8s.io/client-go/listers/core/v1"
+	storagelistersv1 "k8s.io/client-go/listers/storage/v1"
 	storagelisters "k8s.io/client-go/listers/storage/v1beta1"
 	kcache "k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/tools/record"
 	"k8s.io/client-go/util/workqueue"
 	cloudprovider "k8s.io/cloud-provider"
 	"k8s.io/klog"
-	"k8s.io/kubernetes/pkg/controller"
 	"k8s.io/kubernetes/pkg/controller/volume/attachdetach/cache"
 	"k8s.io/kubernetes/pkg/controller/volume/attachdetach/metrics"
 	"k8s.io/kubernetes/pkg/controller/volume/attachdetach/populator"
@@ -105,27 +106,14 @@ func NewAttachDetachController(
 	nodeInformer coreinformers.NodeInformer,
 	pvcInformer coreinformers.PersistentVolumeClaimInformer,
 	pvInformer coreinformers.PersistentVolumeInformer,
-	csiNodeInformer storageinformers.CSINodeInformer,
+	csiNodeInformer storageinformersv1.CSINodeInformer,
+	csiDriverInformer storageinformers.CSIDriverInformer,
 	cloud cloudprovider.Interface,
 	plugins []volume.VolumePlugin,
 	prober volume.DynamicPluginProber,
 	disableReconciliationSync bool,
 	reconcilerSyncDuration time.Duration,
 	timerConfig TimerConfig) (AttachDetachController, error) {
-	// TODO: The default resyncPeriod for shared informers is 12 hours, this is
-	// unacceptable for the attach/detach controller. For example, if a pod is
-	// skipped because the node it is scheduled to didn't set its annotation in
-	// time, we don't want to have to wait 12hrs before processing the pod
-	// again.
-	// Luckily https://github.com/kubernetes/kubernetes/issues/23394 is being
-	// worked on and will split resync in to resync and relist. Once that
-	// happens the resync period can be set to something much faster (30
-	// seconds).
-	// If that issue is not resolved in time, then this controller will have to
-	// consider some unappealing alternate options: use a non-shared informer
-	// and set a faster resync period even if it causes relist, or requeue
-	// dropped pods so they are continuously processed until it is accepted or
-	// deleted (probably can't do this with sharedInformer), etc.
 	adc := &attachDetachController{
 		kubeClient:  kubeClient,
 		pvcLister:   pvcInformer.Lister(),
@@ -145,6 +133,11 @@ func NewAttachDetachController(
 		utilfeature.DefaultFeatureGate.Enabled(features.CSINodeInfo) {
 		adc.csiNodeLister = csiNodeInformer.Lister()
 		adc.csiNodeSynced = csiNodeInformer.Informer().HasSynced
+	}
+
+	if utilfeature.DefaultFeatureGate.Enabled(features.CSIDriverRegistry) {
+		adc.csiDriverLister = csiDriverInformer.Lister()
+		adc.csiDriversSynced = csiDriverInformer.Informer().HasSynced
 	}
 
 	if err := adc.volumePluginMgr.InitPlugins(plugins, prober, adc); err != nil {
@@ -198,9 +191,12 @@ func NewAttachDetachController(
 
 	// This custom indexer will index pods by its PVC keys. Then we don't need
 	// to iterate all pods every time to find pods which reference given PVC.
-	adc.podIndexer.AddIndexers(kcache.Indexers{
+	err := adc.podIndexer.AddIndexers(kcache.Indexers{
 		pvcKeyIndex: indexByPVCKey,
 	})
+	if err != nil {
+		klog.Warningf("adding indexer got %v", err)
+	}
 
 	nodeInformer.Informer().AddEventHandler(kcache.ResourceEventHandlerFuncs{
 		AddFunc:    adc.nodeAdd,
@@ -268,8 +264,14 @@ type attachDetachController struct {
 	nodeLister  corelisters.NodeLister
 	nodesSynced kcache.InformerSynced
 
-	csiNodeLister storagelisters.CSINodeLister
+	csiNodeLister storagelistersv1.CSINodeLister
 	csiNodeSynced kcache.InformerSynced
+
+	// csiDriverLister is the shared CSIDriver lister used to fetch and store
+	// CSIDriver objects from the API server. It is shared with other controllers
+	// and therefore the CSIDriver objects in its store should be treated as immutable.
+	csiDriverLister  storagelisters.CSIDriverLister
+	csiDriversSynced kcache.InformerSynced
 
 	// cloud provider used by volume host
 	cloud cloudprovider.Interface
@@ -327,8 +329,11 @@ func (adc *attachDetachController) Run(stopCh <-chan struct{}) {
 	if adc.csiNodeSynced != nil {
 		synced = append(synced, adc.csiNodeSynced)
 	}
+	if adc.csiDriversSynced != nil {
+		synced = append(synced, adc.csiDriversSynced)
+	}
 
-	if !controller.WaitForCacheSync("attach detach", stopCh, synced...) {
+	if !kcache.WaitForNamedCacheSync("attach detach", stopCh, synced...) {
 		return
 	}
 
@@ -665,8 +670,12 @@ func (adc *attachDetachController) processVolumesInUse(
 var _ volume.VolumeHost = &attachDetachController{}
 var _ volume.AttachDetachVolumeHost = &attachDetachController{}
 
-func (adc *attachDetachController) CSINodeLister() storagelisters.CSINodeLister {
+func (adc *attachDetachController) CSINodeLister() storagelistersv1.CSINodeLister {
 	return adc.csiNodeLister
+}
+
+func (adc *attachDetachController) CSIDriverLister() storagelisters.CSIDriverLister {
+	return adc.csiDriverLister
 }
 
 func (adc *attachDetachController) IsAttachDetachController() bool {
@@ -760,7 +769,7 @@ func (adc *attachDetachController) DeleteServiceAccountTokenFunc() func(types.UI
 }
 
 func (adc *attachDetachController) GetExec(pluginName string) mount.Exec {
-	return mount.NewOsExec()
+	return mount.NewOSExec()
 }
 
 func (adc *attachDetachController) addNodeToDswp(node *v1.Node, nodeName types.NodeName) {
@@ -792,4 +801,8 @@ func (adc *attachDetachController) GetEventRecorder() record.EventRecorder {
 func (adc *attachDetachController) GetSubpather() subpath.Interface {
 	// Subpaths not needed in attachdetach controller
 	return nil
+}
+
+func (adc *attachDetachController) GetCSIDriverLister() storagelisters.CSIDriverLister {
+	return adc.csiDriverLister
 }

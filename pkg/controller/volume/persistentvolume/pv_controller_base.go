@@ -21,7 +21,7 @@ import (
 	"strconv"
 	"time"
 
-	"k8s.io/api/core/v1"
+	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -38,8 +38,10 @@ import (
 	"k8s.io/client-go/tools/record"
 	"k8s.io/client-go/util/workqueue"
 	cloudprovider "k8s.io/cloud-provider"
+	csitrans "k8s.io/csi-translation-lib"
 	"k8s.io/kubernetes/pkg/controller"
 	"k8s.io/kubernetes/pkg/controller/volume/persistentvolume/metrics"
+	pvutil "k8s.io/kubernetes/pkg/controller/volume/persistentvolume/util"
 	"k8s.io/kubernetes/pkg/util/goroutinemap"
 	vol "k8s.io/kubernetes/pkg/volume"
 
@@ -91,6 +93,8 @@ func NewController(p ControllerParameters) (*PersistentVolumeController, error) 
 		claimQueue:                    workqueue.NewNamed("claims"),
 		volumeQueue:                   workqueue.NewNamed("volumes"),
 		resyncPeriod:                  p.SyncPeriod,
+		operationTimestamps:           metrics.NewOperationStartTimeCache(),
+		translator:                    csitrans.New(),
 	}
 
 	// Prober is nil because PV is not aware of Flexvolume.
@@ -206,8 +210,15 @@ func (ctrl *PersistentVolumeController) updateVolume(volume *v1.PersistentVolume
 
 // deleteVolume runs in worker thread and handles "volume deleted" event.
 func (ctrl *PersistentVolumeController) deleteVolume(volume *v1.PersistentVolume) {
-	_ = ctrl.volumes.store.Delete(volume)
-	klog.V(4).Infof("volume %q deleted", volume.Name)
+	if err := ctrl.volumes.store.Delete(volume); err != nil {
+		klog.Errorf("volume %q deletion encountered : %v", volume.Name, err)
+	} else {
+		klog.V(4).Infof("volume %q deleted", volume.Name)
+	}
+	// record deletion metric if a deletion start timestamp is in the cache
+	// the following calls will be a no-op if there is nothing for this volume in the cache
+	// end of timestamp cache entry lifecycle, "RecordMetric" will do the clean
+	metrics.RecordMetric(volume.Name, &ctrl.operationTimestamps, nil)
 
 	if volume.Spec.ClaimRef == nil {
 		return
@@ -244,20 +255,28 @@ func (ctrl *PersistentVolumeController) updateClaim(claim *v1.PersistentVolumeCl
 	}
 }
 
+// Unit test [5-5] [5-6] [5-7]
 // deleteClaim runs in worker thread and handles "claim deleted" event.
 func (ctrl *PersistentVolumeController) deleteClaim(claim *v1.PersistentVolumeClaim) {
-	_ = ctrl.claims.Delete(claim)
-	klog.V(4).Infof("claim %q deleted", claimToClaimKey(claim))
+	if err := ctrl.claims.Delete(claim); err != nil {
+		klog.Errorf("claim %q deletion encountered : %v", claim.Name, err)
+	}
+	claimKey := claimToClaimKey(claim)
+	klog.V(4).Infof("claim %q deleted", claimKey)
+	// clean any possible unfinished provision start timestamp from cache
+	// Unit test [5-8] [5-9]
+	ctrl.operationTimestamps.Delete(claimKey)
 
 	volumeName := claim.Spec.VolumeName
 	if volumeName == "" {
-		klog.V(5).Infof("deleteClaim[%q]: volume not bound", claimToClaimKey(claim))
+		klog.V(5).Infof("deleteClaim[%q]: volume not bound", claimKey)
 		return
 	}
+
 	// sync the volume when its claim is deleted.  Explicitly sync'ing the
 	// volume here in response to claim deletion prevents the volume from
 	// waiting until the next sync period for its Release.
-	klog.V(5).Infof("deleteClaim[%q]: scheduling sync of volume %s", claimToClaimKey(claim), volumeName)
+	klog.V(5).Infof("deleteClaim[%q]: scheduling sync of volume %s", claimKey, volumeName)
 	ctrl.volumeQueue.Add(volumeName)
 }
 
@@ -270,7 +289,7 @@ func (ctrl *PersistentVolumeController) Run(stopCh <-chan struct{}) {
 	klog.Infof("Starting persistent volume controller")
 	defer klog.Infof("Shutting down persistent volume controller")
 
-	if !controller.WaitForCacheSync("persistent volume", stopCh, ctrl.volumeListerSynced, ctrl.claimListerSynced, ctrl.classListerSynced, ctrl.podListerSynced, ctrl.NodeListerSynced) {
+	if !cache.WaitForNamedCacheSync("persistent volume", stopCh, ctrl.volumeListerSynced, ctrl.claimListerSynced, ctrl.classListerSynced, ctrl.podListerSynced, ctrl.NodeListerSynced) {
 		return
 	}
 
@@ -426,9 +445,9 @@ func (ctrl *PersistentVolumeController) resync() {
 }
 
 // setClaimProvisioner saves
-// claim.Annotations[annStorageProvisioner] = class.Provisioner
+// claim.Annotations[pvutil.AnnStorageProvisioner] = class.Provisioner
 func (ctrl *PersistentVolumeController) setClaimProvisioner(claim *v1.PersistentVolumeClaim, provisionerName string) (*v1.PersistentVolumeClaim, error) {
-	if val, ok := claim.Annotations[annStorageProvisioner]; ok && val == provisionerName {
+	if val, ok := claim.Annotations[pvutil.AnnStorageProvisioner]; ok && val == provisionerName {
 		// annotation is already set, nothing to do
 		return claim, nil
 	}
@@ -436,7 +455,7 @@ func (ctrl *PersistentVolumeController) setClaimProvisioner(claim *v1.Persistent
 	// The volume from method args can be pointing to watcher cache. We must not
 	// modify these, therefore create a copy.
 	claimClone := claim.DeepCopy()
-	metav1.SetMetaDataAnnotation(&claimClone.ObjectMeta, annStorageProvisioner, provisionerName)
+	metav1.SetMetaDataAnnotation(&claimClone.ObjectMeta, pvutil.AnnStorageProvisioner, provisionerName)
 	newClaim, err := ctrl.kubeClient.CoreV1().PersistentVolumeClaims(claim.Namespace).Update(claimClone)
 	if err != nil {
 		return newClaim, err
@@ -451,14 +470,14 @@ func (ctrl *PersistentVolumeController) setClaimProvisioner(claim *v1.Persistent
 // Stateless functions
 
 func getClaimStatusForLogging(claim *v1.PersistentVolumeClaim) string {
-	bound := metav1.HasAnnotation(claim.ObjectMeta, annBindCompleted)
-	boundByController := metav1.HasAnnotation(claim.ObjectMeta, annBoundByController)
+	bound := metav1.HasAnnotation(claim.ObjectMeta, pvutil.AnnBindCompleted)
+	boundByController := metav1.HasAnnotation(claim.ObjectMeta, pvutil.AnnBoundByController)
 
 	return fmt.Sprintf("phase: %s, bound to: %q, bindCompleted: %v, boundByController: %v", claim.Status.Phase, claim.Spec.VolumeName, bound, boundByController)
 }
 
 func getVolumeStatusForLogging(volume *v1.PersistentVolume) string {
-	boundByController := metav1.HasAnnotation(volume.ObjectMeta, annBoundByController)
+	boundByController := metav1.HasAnnotation(volume.ObjectMeta, pvutil.AnnBoundByController)
 	claimName := ""
 	if volume.Spec.ClaimRef != nil {
 		claimName = fmt.Sprintf("%s/%s (uid: %s)", volume.Spec.ClaimRef.Namespace, volume.Spec.ClaimRef.Name, volume.Spec.ClaimRef.UID)

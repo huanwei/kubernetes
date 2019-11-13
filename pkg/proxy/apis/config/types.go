@@ -63,9 +63,6 @@ type KubeProxyIPVSConfiguration struct {
 // KubeProxyConntrackConfiguration contains conntrack settings for
 // the Kubernetes proxy server.
 type KubeProxyConntrackConfiguration struct {
-	// max is the maximum number of NAT connections to track (0 to
-	// leave as-is).  This takes precedence over maxPerCore and min.
-	Max *int32
 	// maxPerCore is the maximum number of NAT connections to track
 	// per CPU core (0 to leave the limit as-is and ignore min).
 	MaxPerCore *int32
@@ -87,7 +84,7 @@ type KubeProxyWinkernelConfiguration struct {
 	// networkName is the name of the network kube-proxy will use
 	// to create endpoints and policies
 	NetworkName string
-	// sourceVip is the IP address of the source VIP endoint used for
+	// sourceVip is the IP address of the source VIP endpoint used for
 	// NAT when loadbalancing
 	SourceVip string
 	// enableDSR tells kube-proxy whether HNS policies should be created
@@ -138,9 +135,6 @@ type KubeProxyConfiguration struct {
 	// portRange is the range of host ports (beginPort-endPort, inclusive) that may be consumed
 	// in order to proxy service traffic. If unspecified (0-0) then ports will be randomly chosen.
 	PortRange string
-	// resourceContainer is the absolute name of the resource-only container to create and run
-	// the Kube-proxy in (Default: /kube-proxy).
-	ResourceContainer string
 	// udpIdleTimeout is how long an idle UDP connection will be kept open (e.g. '250ms', '2s').
 	// Must be greater than 0. Only applicable for proxyMode=userspace.
 	UDPIdleTimeout metav1.Duration

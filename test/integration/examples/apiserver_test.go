@@ -49,8 +49,8 @@ import (
 	kubeaggregatorserver "k8s.io/kube-aggregator/pkg/cmd/server"
 	"k8s.io/kubernetes/cmd/kube-apiserver/app"
 	"k8s.io/kubernetes/cmd/kube-apiserver/app/options"
-	"k8s.io/kubernetes/cmd/kubeadm/app/util/pkiutil"
 	"k8s.io/kubernetes/test/integration/framework"
+	testutil "k8s.io/kubernetes/test/utils"
 	wardlev1alpha1 "k8s.io/sample-apiserver/pkg/apis/wardle/v1alpha1"
 	wardlev1beta1 "k8s.io/sample-apiserver/pkg/apis/wardle/v1beta1"
 	sampleserver "k8s.io/sample-apiserver/pkg/cmd/server"
@@ -63,7 +63,7 @@ func TestAggregatedAPIServer(t *testing.T) {
 	certDir, _ := ioutil.TempDir("", "test-integration-apiserver")
 	defer os.RemoveAll(certDir)
 	_, defaultServiceClusterIPRange, _ := net.ParseCIDR("10.0.0.0/24")
-	proxySigningKey, err := pkiutil.NewPrivateKey()
+	proxySigningKey, err := testutil.NewPrivateKey()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,10 +72,10 @@ func TestAggregatedAPIServer(t *testing.T) {
 		t.Fatal(err)
 	}
 	proxyCACertFile, _ := ioutil.TempFile(certDir, "proxy-ca.crt")
-	if err := ioutil.WriteFile(proxyCACertFile.Name(), pkiutil.EncodeCertPEM(proxySigningCert), 0644); err != nil {
+	if err := ioutil.WriteFile(proxyCACertFile.Name(), testutil.EncodeCertPEM(proxySigningCert), 0644); err != nil {
 		t.Fatal(err)
 	}
-	clientSigningKey, err := pkiutil.NewPrivateKey()
+	clientSigningKey, err := testutil.NewPrivateKey()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,7 +84,7 @@ func TestAggregatedAPIServer(t *testing.T) {
 		t.Fatal(err)
 	}
 	clientCACertFile, _ := ioutil.TempFile(certDir, "client-ca.crt")
-	if err := ioutil.WriteFile(clientCACertFile.Name(), pkiutil.EncodeCertPEM(clientSigningCert), 0644); err != nil {
+	if err := ioutil.WriteFile(clientCACertFile.Name(), testutil.EncodeCertPEM(clientSigningCert), 0644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -101,7 +101,7 @@ func TestAggregatedAPIServer(t *testing.T) {
 		kubeAPIServerOptions.SecureServing.ServerCert.CertDirectory = certDir
 		kubeAPIServerOptions.InsecureServing.BindPort = 0
 		kubeAPIServerOptions.Etcd.StorageConfig.Transport.ServerList = []string{framework.GetEtcdURL()}
-		kubeAPIServerOptions.ServiceClusterIPRange = *defaultServiceClusterIPRange
+		kubeAPIServerOptions.ServiceClusterIPRanges = defaultServiceClusterIPRange.String()
 		kubeAPIServerOptions.Authentication.RequestHeader.UsernameHeaders = []string{"X-Remote-User"}
 		kubeAPIServerOptions.Authentication.RequestHeader.GroupHeaders = []string{"X-Remote-Group"}
 		kubeAPIServerOptions.Authentication.RequestHeader.ExtraHeaderPrefixes = []string{"X-Remote-Extra-"}
@@ -118,7 +118,7 @@ func TestAggregatedAPIServer(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		kubeAPIServerConfig, _, _, _, admissionPostStartHook, err := app.CreateKubeAPIServerConfig(completedOptions, tunneler, proxyTransport)
+		kubeAPIServerConfig, _, _, _, err := app.CreateKubeAPIServerConfig(completedOptions, tunneler, proxyTransport)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -129,7 +129,7 @@ func TestAggregatedAPIServer(t *testing.T) {
 		kubeAPIServerClientConfig.ServerName = ""
 		kubeClientConfigValue.Store(kubeAPIServerClientConfig)
 
-		kubeAPIServer, err := app.CreateKubeAPIServer(kubeAPIServerConfig, genericapiserver.NewEmptyDelegate(), admissionPostStartHook)
+		kubeAPIServer, err := app.CreateKubeAPIServer(kubeAPIServerConfig, genericapiserver.NewEmptyDelegate())
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -236,11 +236,11 @@ func TestAggregatedAPIServer(t *testing.T) {
 	// start the aggregator
 	aggregatorCertDir, _ := ioutil.TempDir("", "test-integration-aggregator")
 	defer os.RemoveAll(aggregatorCertDir)
-	proxyClientKey, err := pkiutil.NewPrivateKey()
+	proxyClientKey, err := testutil.NewPrivateKey()
 	if err != nil {
 		t.Fatal(err)
 	}
-	proxyClientCert, err := pkiutil.NewSignedCert(
+	proxyClientCert, err := testutil.NewSignedCert(
 		&cert.Config{
 			CommonName: "kube-aggregator",
 			Usages:     []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
@@ -249,7 +249,7 @@ func TestAggregatedAPIServer(t *testing.T) {
 	)
 	proxyClientCertFile, _ := ioutil.TempFile(aggregatorCertDir, "proxy-client.crt")
 	proxyClientKeyFile, _ := ioutil.TempFile(aggregatorCertDir, "proxy-client.key")
-	if err := ioutil.WriteFile(proxyClientCertFile.Name(), pkiutil.EncodeCertPEM(proxyClientCert), 0600); err != nil {
+	if err := ioutil.WriteFile(proxyClientCertFile.Name(), testutil.EncodeCertPEM(proxyClientCert), 0600); err != nil {
 		t.Fatal(err)
 	}
 	proxyClientKeyPEM, err := keyutil.MarshalPrivateKeyToPEM(proxyClientKey)
@@ -323,13 +323,13 @@ func TestAggregatedAPIServer(t *testing.T) {
 	}
 	aggregatorClient := aggregatorclient.NewForConfigOrDie(aggregatorClientConfig)
 	_, err = aggregatorClient.ApiregistrationV1beta1().APIServices().Create(&apiregistrationv1beta1.APIService{
-		ObjectMeta: metav1.ObjectMeta{Name: "v1alpha1.wardle.k8s.io"},
+		ObjectMeta: metav1.ObjectMeta{Name: "v1alpha1.wardle.example.com"},
 		Spec: apiregistrationv1beta1.APIServiceSpec{
 			Service: &apiregistrationv1beta1.ServiceReference{
 				Namespace: "kube-wardle",
 				Name:      "api",
 			},
-			Group:                "wardle.k8s.io",
+			Group:                "wardle.example.com",
 			Version:              "v1alpha1",
 			CABundle:             wardleCA,
 			GroupPriorityMinimum: 200,
@@ -391,7 +391,7 @@ func checkWardleUnavailableDiscoveryError(t *testing.T, err error) bool {
 		t.Logf("Unexpected failed groups: %v", err)
 		return false
 	}
-	groupVersion := schema.GroupVersion{Group: "wardle.k8s.io", Version: "v1alpha1"}
+	groupVersion := schema.GroupVersion{Group: "wardle.example.com", Version: "v1alpha1"}
 	groupVersionErr, ok := discoveryErr.Groups[groupVersion]
 	if !ok {
 		t.Logf("Unexpected failed group version: %v", err)
@@ -475,7 +475,7 @@ func testAPIGroupList(t *testing.T, client rest.Interface) {
 }
 
 func testAPIGroup(t *testing.T, client rest.Interface) {
-	contents, err := readResponse(client, "/apis/wardle.k8s.io")
+	contents, err := readResponse(client, "/apis/wardle.example.com")
 	if err != nil {
 		t.Fatalf("%v", err)
 	}
@@ -483,7 +483,7 @@ func testAPIGroup(t *testing.T, client rest.Interface) {
 	var apiGroup metav1.APIGroup
 	err = json.Unmarshal(contents, &apiGroup)
 	if err != nil {
-		t.Fatalf("Error in unmarshalling response from server %s: %v", "/apis/wardle.k8s.io", err)
+		t.Fatalf("Error in unmarshalling response from server %s: %v", "/apis/wardle.example.com", err)
 	}
 	assert.Equal(t, wardlev1alpha1.SchemeGroupVersion.Group, apiGroup.Name)
 	assert.Equal(t, 2, len(apiGroup.Versions))
@@ -493,7 +493,7 @@ func testAPIGroup(t *testing.T, client rest.Interface) {
 }
 
 func testAPIResourceList(t *testing.T, client rest.Interface) {
-	contents, err := readResponse(client, "/apis/wardle.k8s.io/v1alpha1")
+	contents, err := readResponse(client, "/apis/wardle.example.com/v1alpha1")
 	if err != nil {
 		t.Fatalf("%v", err)
 	}
@@ -501,7 +501,7 @@ func testAPIResourceList(t *testing.T, client rest.Interface) {
 	var apiResourceList metav1.APIResourceList
 	err = json.Unmarshal(contents, &apiResourceList)
 	if err != nil {
-		t.Fatalf("Error in unmarshalling response from server %s: %v", "/apis/wardle.k8s.io/v1alpha1", err)
+		t.Fatalf("Error in unmarshalling response from server %s: %v", "/apis/wardle.example.com/v1alpha1", err)
 	}
 	assert.Equal(t, wardlev1alpha1.SchemeGroupVersion.String(), apiResourceList.GroupVersion)
 	assert.Equal(t, 2, len(apiResourceList.APIResources))

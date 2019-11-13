@@ -14,13 +14,11 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package e2e_kubeadm
+package kubeadm
 
 const (
 	kubePublicNamespace = "kube-public"
 	kubeSystemNamespace = "kube-system"
 
 	anonymousUser = "system:anonymous"
-
-	nodesGroup = "system:nodes"
 )

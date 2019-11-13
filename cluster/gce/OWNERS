@@ -2,19 +2,23 @@
 
 reviewers:
   - bowei
+  - cjcullen
   - gmarek
-  - jszczepkowski
   - vishh
   - mwielgus
   - MaciekPytel
   - jingax10
   - yujuhong
+  - mtaufen
 approvers:
   - bowei
+  - cjcullen
   - gmarek
-  - jszczepkowski
   - vishh
   - mwielgus
   - MaciekPytel
   - jingax10
   - yujuhong
+  - mtaufen
+emeritus_approvers:
+  - jszczepkowski

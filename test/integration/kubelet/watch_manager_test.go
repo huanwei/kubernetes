@@ -22,7 +22,7 @@ import (
 	"testing"
 	"time"
 
-	"k8s.io/api/core/v1"
+	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -35,13 +35,18 @@ import (
 )
 
 func TestWatchBasedManager(t *testing.T) {
+	testNamespace := "test-watch-based-manager"
 	server := kubeapiservertesting.StartTestServerOrDie(t, nil, nil, framework.SharedEtcd())
 	defer server.TearDownFn()
 
 	server.ClientConfig.QPS = 10000
+	server.ClientConfig.Burst = 10000
 	client, err := kubernetes.NewForConfig(server.ClientConfig)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+	if _, err := client.CoreV1().Namespaces().Create((&v1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: testNamespace}})); err != nil {
+		t.Fatal(err)
 	}
 
 	listObj := func(namespace string, options metav1.ListOptions) (runtime.Object, error) {
@@ -56,24 +61,35 @@ func TestWatchBasedManager(t *testing.T) {
 	// create 1000 secrets in parallel
 	t.Log(time.Now(), "creating 1000 secrets")
 	wg := sync.WaitGroup{}
+	errCh := make(chan error, 1)
 	for i := 0; i < 10; i++ {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
 			for j := 0; j < 100; j++ {
 				name := fmt.Sprintf("s%d", i*100+j)
-				if _, err := client.CoreV1().Secrets("default").Create(&v1.Secret{ObjectMeta: metav1.ObjectMeta{Name: name}}); err != nil {
-					t.Fatal(err)
+				if _, err := client.CoreV1().Secrets(testNamespace).Create(&v1.Secret{ObjectMeta: metav1.ObjectMeta{Name: name}}); err != nil {
+					select {
+					case errCh <- err:
+					default:
+					}
 				}
 			}
 			fmt.Print(".")
 		}(i)
 	}
+
 	wg.Wait()
+	select {
+	case err := <-errCh:
+		t.Fatal(err)
+	default:
+	}
 	t.Log(time.Now(), "finished creating 1000 secrets")
 
 	// fetch all secrets
 	wg = sync.WaitGroup{}
+	errCh = make(chan error, 1)
 	for i := 0; i < 10; i++ {
 		wg.Add(1)
 		go func(i int) {
@@ -81,9 +97,9 @@ func TestWatchBasedManager(t *testing.T) {
 			for j := 0; j < 100; j++ {
 				name := fmt.Sprintf("s%d", i*100+j)
 				start := time.Now()
-				store.AddReference("default", name)
+				store.AddReference(testNamespace, name)
 				err := wait.PollImmediate(10*time.Millisecond, 10*time.Second, func() (bool, error) {
-					obj, err := store.Get("default", name)
+					obj, err := store.Get(testNamespace, name)
 					if err != nil {
 						t.Logf("failed on %s, retrying: %v", name, err)
 						return false, nil
@@ -94,13 +110,22 @@ func TestWatchBasedManager(t *testing.T) {
 					return true, nil
 				})
 				if err != nil {
-					t.Fatalf("failed on %s: %v", name, err)
+					select {
+					case errCh <- fmt.Errorf("failed on :%s: %v", name, err):
+					default:
+					}
 				}
-				if d := time.Now().Sub(start); d > time.Second {
+				if d := time.Since(start); d > time.Second {
 					t.Logf("%s took %v", name, d)
 				}
 			}
 		}(i)
 	}
+
 	wg.Wait()
+	select {
+	case err = <-errCh:
+		t.Fatal(err)
+	default:
+	}
 }

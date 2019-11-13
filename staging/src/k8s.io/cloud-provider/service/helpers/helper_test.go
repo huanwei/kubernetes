@@ -20,7 +20,8 @@ import (
 	"strings"
 	"testing"
 
-	"k8s.io/api/core/v1"
+	v1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	utilnet "k8s.io/utils/net"
 )
 
@@ -58,13 +59,13 @@ func TestGetLoadBalancerSourceRanges(t *testing.T) {
 		annotations[v1.AnnotationLoadBalancerSourceRangesKey] = v
 		svc := v1.Service{}
 		svc.Annotations = annotations
-		cidrs, err := GetLoadBalancerSourceRanges(&svc)
+		_, err := GetLoadBalancerSourceRanges(&svc)
 		if err != nil {
 			t.Errorf("Unexpected error parsing: %q", v)
 		}
 		svc = v1.Service{}
 		svc.Spec.LoadBalancerSourceRanges = strings.Split(v, ",")
-		cidrs, err = GetLoadBalancerSourceRanges(&svc)
+		cidrs, err := GetLoadBalancerSourceRanges(&svc)
 		if err != nil {
 			t.Errorf("Unexpected error parsing: %q", v)
 		}
@@ -218,4 +219,53 @@ func TestNeedsHealthCheck(t *testing.T) {
 			ExternalTrafficPolicy: v1.ServiceExternalTrafficPolicyTypeLocal,
 		},
 	})
+}
+
+func TestHasLBFinalizer(t *testing.T) {
+	testCases := []struct {
+		desc         string
+		svc          *v1.Service
+		hasFinalizer bool
+	}{
+		{
+			desc:         "service without finalizer",
+			svc:          &v1.Service{},
+			hasFinalizer: false,
+		},
+		{
+			desc: "service with unrelated finalizer",
+			svc: &v1.Service{
+				ObjectMeta: metav1.ObjectMeta{
+					Finalizers: []string{"unrelated"},
+				},
+			},
+			hasFinalizer: false,
+		},
+		{
+			desc: "service with one finalizer",
+			svc: &v1.Service{
+				ObjectMeta: metav1.ObjectMeta{
+					Finalizers: []string{LoadBalancerCleanupFinalizer},
+				},
+			},
+			hasFinalizer: true,
+		},
+		{
+			desc: "service with multiple finalizers",
+			svc: &v1.Service{
+				ObjectMeta: metav1.ObjectMeta{
+					Finalizers: []string{LoadBalancerCleanupFinalizer, "unrelated"},
+				},
+			},
+			hasFinalizer: true,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.desc, func(t *testing.T) {
+			if hasFinalizer := HasLBFinalizer(tc.svc); hasFinalizer != tc.hasFinalizer {
+				t.Errorf("HasLBFinalizer() = %t, want %t", hasFinalizer, tc.hasFinalizer)
+			}
+		})
+	}
 }

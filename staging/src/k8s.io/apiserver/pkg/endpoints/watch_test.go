@@ -34,7 +34,6 @@ import (
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -579,6 +578,7 @@ func TestWatchHTTPErrors(t *testing.T) {
 
 	// Setup a new watchserver
 	watchServer := &handlers.WatchServer{
+		Scope:    &handlers.RequestScope{},
 		Watching: watcher,
 
 		MediaType:       "testcase/json",
@@ -603,6 +603,9 @@ func TestWatchHTTPErrors(t *testing.T) {
 	req, _ := http.NewRequest("GET", dest.String(), nil)
 	client := http.Client{}
 	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
 	errStatus := errors.NewInternalError(fmt.Errorf("we got an error")).Status()
 	watcher.Error(&errStatus)
 	watcher.Stop()
@@ -639,6 +642,7 @@ func TestWatchHTTPDynamicClientErrors(t *testing.T) {
 
 	// Setup a new watchserver
 	watchServer := &handlers.WatchServer{
+		Scope:    &handlers.RequestScope{},
 		Watching: watcher,
 
 		MediaType:       "testcase/json",
@@ -654,38 +658,20 @@ func TestWatchHTTPDynamicClientErrors(t *testing.T) {
 		watchServer.ServeHTTP(w, req)
 	}))
 	defer s.Close()
+	defer s.CloseClientConnections()
 
 	client := dynamic.NewForConfigOrDie(&restclient.Config{
 		Host:    s.URL,
 		APIPath: "/" + prefix,
 	}).Resource(newGroupVersion.WithResource("simple"))
 
-	w, err := client.Watch(metav1.ListOptions{})
-	if err != nil {
+	_, err := client.Watch(metav1.ListOptions{})
+	if err == nil {
 		t.Fatal(err)
 	}
-
-	errStatus := errors.NewInternalError(fmt.Errorf("we got an error")).Status()
-	watcher.Error(&errStatus)
-	watcher.Stop()
-
-	got := <-w.ResultChan()
-	if got.Type != watch.Error {
-		t.Fatalf("unexpected watch type: %#v", got)
+	if err.Error() != "no stream serializers registered for testcase/json" {
+		t.Fatalf("unexpected error: %v", err)
 	}
-	obj, ok := got.Object.(*unstructured.Unstructured)
-	if !ok {
-		t.Fatalf("not the correct object type: %#v", got)
-	}
-
-	status := &metav1.Status{}
-	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(obj.UnstructuredContent(), status); err != nil {
-		t.Fatal(err)
-	}
-	if status.Kind != "Status" || status.APIVersion != "v1" || status.Code != 500 || status.Status != "Failure" || !strings.Contains(status.Message, "we got an error") {
-		t.Fatalf("error: %#v", status)
-	}
-	t.Logf("status: %#v", status)
 }
 
 func TestWatchHTTPTimeout(t *testing.T) {
@@ -701,6 +687,7 @@ func TestWatchHTTPTimeout(t *testing.T) {
 
 	// Setup a new watchserver
 	watchServer := &handlers.WatchServer{
+		Scope:    &handlers.RequestScope{},
 		Watching: watcher,
 
 		MediaType:       "testcase/json",
@@ -725,6 +712,9 @@ func TestWatchHTTPTimeout(t *testing.T) {
 	req, _ := http.NewRequest("GET", dest.String(), nil)
 	client := http.Client{}
 	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
 	watcher.Add(&apitesting.Simple{TypeMeta: metav1.TypeMeta{APIVersion: newGroupVersion.String()}})
 
 	// Make sure we can actually watch an endpoint
@@ -757,6 +747,30 @@ func TestWatchHTTPTimeout(t *testing.T) {
 func BenchmarkWatchHTTP(b *testing.B) {
 	items := benchmarkItems(b)
 
+	// use ASCII names to capture the cost of handling ASCII only self-links
+	for i := range items {
+		item := &items[i]
+		item.Namespace = fmt.Sprintf("namespace-%d", i)
+		item.Name = fmt.Sprintf("reasonable-name-%d", i)
+	}
+
+	runWatchHTTPBenchmark(b, items)
+}
+
+func BenchmarkWatchHTTP_UTF8(b *testing.B) {
+	items := benchmarkItems(b)
+
+	// use UTF names to capture the cost of handling UTF-8 escaping in self-links
+	for i := range items {
+		item := &items[i]
+		item.Namespace = fmt.Sprintf("躀痢疈蜧í柢-%d", i)
+		item.Name = fmt.Sprintf("翏Ŏ熡韐-%d", i)
+	}
+
+	runWatchHTTPBenchmark(b, items)
+}
+
+func runWatchHTTPBenchmark(b *testing.B, items []example.Pod) {
 	simpleStorage := &SimpleRESTStorage{}
 	handler := handle(map[string]rest.Storage{"simples": simpleStorage})
 	server := httptest.NewServer(handler)

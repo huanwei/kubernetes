@@ -23,10 +23,11 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"k8s.io/api/core/v1"
-	runtimeapi "k8s.io/kubernetes/pkg/kubelet/apis/cri/runtime/v1alpha2"
+	runtimeapi "k8s.io/cri-api/pkg/apis/runtime/v1alpha2"
 	kubecontainer "k8s.io/kubernetes/pkg/kubelet/container"
 	containertest "k8s.io/kubernetes/pkg/kubelet/container/testing"
 	"k8s.io/kubernetes/pkg/kubelet/lifecycle"
@@ -35,6 +36,7 @@ import (
 // TestRemoveContainer tests removing the container and its corresponding container logs.
 func TestRemoveContainer(t *testing.T) {
 	fakeRuntime, _, m, err := createTestRuntimeManager()
+	require.NoError(t, err)
 	pod := &v1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			UID:       "12345678",
@@ -325,7 +327,7 @@ func TestLifeCycleHook(t *testing.T) {
 		// Now try to create a container, which should in turn invoke PostStart Hook
 		_, err := m.startContainer(fakeSandBox.Id, fakeSandBoxConfig, testContainer, testPod, fakePodStatus, nil, "")
 		if err != nil {
-			t.Errorf("startContainer erro =%v", err)
+			t.Errorf("startContainer error =%v", err)
 		}
 		if fakeRunner.Cmd[0] != cmdPostStart.PostStart.Exec.Command[0] {
 			t.Errorf("CMD PostStart hook was not invoked")

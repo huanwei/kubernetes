@@ -18,10 +18,10 @@ package cephfs
 
 import (
 	"os"
-	"path"
+	"path/filepath"
 	"testing"
 
-	"k8s.io/api/core/v1"
+	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
 	utiltesting "k8s.io/client-go/util/testing"
 	"k8s.io/kubernetes/pkg/util/mount"
@@ -75,7 +75,7 @@ func TestPlugin(t *testing.T) {
 			},
 		},
 	}
-	mounter, err := plug.(*cephfsPlugin).newMounterInternal(volume.NewSpecFromVolume(spec), types.UID("poduid"), &mount.FakeMounter{}, "secrets")
+	mounter, err := plug.(*cephfsPlugin).newMounterInternal(volume.NewSpecFromVolume(spec), types.UID("poduid"), mount.NewFakeMounter(nil), "secrets")
 	if err != nil {
 		t.Errorf("Failed to make a new Mounter: %v", err)
 	}
@@ -83,11 +83,11 @@ func TestPlugin(t *testing.T) {
 		t.Errorf("Got a nil Mounter")
 	}
 	volumePath := mounter.GetPath()
-	volpath := path.Join(tmpDir, "pods/poduid/volumes/kubernetes.io~cephfs/vol1")
+	volpath := filepath.Join(tmpDir, "pods/poduid/volumes/kubernetes.io~cephfs/vol1")
 	if volumePath != volpath {
 		t.Errorf("Got unexpected path: %s", volumePath)
 	}
-	if err := mounter.SetUp(nil); err != nil {
+	if err := mounter.SetUp(volume.MounterArgs{}); err != nil {
 		t.Errorf("Expected success, got: %v", err)
 	}
 	if _, err := os.Stat(volumePath); err != nil {
@@ -97,7 +97,7 @@ func TestPlugin(t *testing.T) {
 			t.Errorf("SetUp() failed: %v", err)
 		}
 	}
-	unmounter, err := plug.(*cephfsPlugin).newUnmounterInternal("vol1", types.UID("poduid"), &mount.FakeMounter{})
+	unmounter, err := plug.(*cephfsPlugin).newUnmounterInternal("vol1", types.UID("poduid"), mount.NewFakeMounter(nil))
 	if err != nil {
 		t.Errorf("Failed to make a new Unmounter: %v", err)
 	}
@@ -128,6 +128,9 @@ func TestConstructVolumeSpec(t *testing.T) {
 	}
 
 	cephfsSpec, err := plug.(*cephfsPlugin).ConstructVolumeSpec("cephfsVolume", "/cephfsVolume/")
+	if err != nil {
+		t.Errorf("ConstructVolumeSpec() failed: %v", err)
+	}
 
 	if cephfsSpec.Name() != "cephfsVolume" {
 		t.Errorf("Get wrong cephfs spec name, got: %s", cephfsSpec.Name())

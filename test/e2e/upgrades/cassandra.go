@@ -32,6 +32,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/version"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/kubernetes/test/e2e/framework"
+	e2esset "k8s.io/kubernetes/test/e2e/framework/statefulset"
 	"k8s.io/kubernetes/test/e2e/framework/testfiles"
 )
 
@@ -42,7 +43,6 @@ const cassandraManifestPath = "test/e2e/testing-manifests/statefulset/cassandra"
 type CassandraUpgradeTest struct {
 	ip               string
 	successfulWrites int
-	ssTester         *framework.StatefulSetTester
 }
 
 // Name returns the tracking name of the test.
@@ -60,7 +60,7 @@ func (CassandraUpgradeTest) Skip(upgCtx UpgradeContext) bool {
 }
 
 func cassandraKubectlCreate(ns, file string) {
-	input := string(testfiles.ReadOrDie(filepath.Join(cassandraManifestPath, file), ginkgo.Fail))
+	input := string(testfiles.ReadOrDie(filepath.Join(cassandraManifestPath, file)))
 	framework.RunKubectlOrDieInput(input, "create", "-f", "-", fmt.Sprintf("--namespace=%s", ns))
 }
 
@@ -73,13 +73,12 @@ func (t *CassandraUpgradeTest) Setup(f *framework.Framework) {
 	ns := f.Namespace.Name
 	statefulsetPoll := 30 * time.Second
 	statefulsetTimeout := 10 * time.Minute
-	t.ssTester = framework.NewStatefulSetTester(f.ClientSet)
 
 	ginkgo.By("Creating a PDB")
 	cassandraKubectlCreate(ns, "pdb.yaml")
 
 	ginkgo.By("Creating a Cassandra StatefulSet")
-	t.ssTester.CreateStatefulSet(cassandraManifestPath, ns)
+	e2esset.CreateStatefulSet(f.ClientSet, cassandraManifestPath, ns)
 
 	ginkgo.By("Creating a cassandra-test-server deployment")
 	cassandraKubectlCreate(ns, "tester.yaml")
@@ -95,18 +94,20 @@ func (t *CassandraUpgradeTest) Setup(f *framework.Framework) {
 		}
 		return true, nil
 	})
-	gomega.Expect(err).NotTo(gomega.HaveOccurred())
+	framework.ExpectNoError(err)
 	framework.Logf("Service endpoint is up")
 
 	ginkgo.By("Adding 2 dummy users")
-	gomega.Expect(t.addUser("Alice")).NotTo(gomega.HaveOccurred())
-	gomega.Expect(t.addUser("Bob")).NotTo(gomega.HaveOccurred())
+	err = t.addUser("Alice")
+	framework.ExpectNoError(err)
+	err = t.addUser("Bob")
+	framework.ExpectNoError(err)
 	t.successfulWrites = 2
 
 	ginkgo.By("Verifying that the users exist")
 	users, err := t.listUsers()
-	gomega.Expect(err).NotTo(gomega.HaveOccurred())
-	gomega.Expect(len(users)).To(gomega.Equal(2))
+	framework.ExpectNoError(err)
+	framework.ExpectEqual(len(users), 2)
 }
 
 // listUsers gets a list of users from the db via the tester service.
@@ -151,7 +152,7 @@ func (t *CassandraUpgradeTest) addUser(name string) error {
 // getServiceIP is a helper method to extract the Ingress IP from the service.
 func (t *CassandraUpgradeTest) getServiceIP(f *framework.Framework, ns, svcName string) string {
 	svc, err := f.ClientSet.CoreV1().Services(ns).Get(svcName, metav1.GetOptions{})
-	gomega.Expect(err).NotTo(gomega.HaveOccurred())
+	framework.ExpectNoError(err)
 	ingress := svc.Status.LoadBalancer.Ingress
 	if len(ingress) == 0 {
 		return ""
@@ -212,6 +213,6 @@ func (t *CassandraUpgradeTest) Test(f *framework.Framework, done <-chan struct{}
 // Teardown does one final check of the data's availability.
 func (t *CassandraUpgradeTest) Teardown(f *framework.Framework) {
 	users, err := t.listUsers()
-	gomega.Expect(err).NotTo(gomega.HaveOccurred())
+	framework.ExpectNoError(err)
 	gomega.Expect(len(users) >= t.successfulWrites).To(gomega.BeTrue())
 }

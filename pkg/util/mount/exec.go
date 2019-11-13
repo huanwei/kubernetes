@@ -18,33 +18,19 @@ package mount
 
 import "k8s.io/utils/exec"
 
-func NewOsExec() Exec {
-	return &osExec{}
+// NewOSExec returns a new Exec interface implementation based on exec()
+func NewOSExec() *OSExec {
+	return &OSExec{}
 }
 
-// Real implementation of Exec interface that uses simple util.Exec
-type osExec struct{}
+// OSExec is an implementation of Exec interface that uses simple utils.Exec
+type OSExec struct{}
 
-var _ Exec = &osExec{}
+var _ Exec = &OSExec{}
 
-func (e *osExec) Run(cmd string, args ...string) ([]byte, error) {
+// Run exucutes the given cmd and arges and returns stdout and stderr as a
+// combined byte stream
+func (e *OSExec) Run(cmd string, args ...string) ([]byte, error) {
 	exe := exec.New()
 	return exe.Command(cmd, args...).CombinedOutput()
-}
-
-func NewFakeExec(run runHook) *FakeExec {
-	return &FakeExec{runHook: run}
-}
-
-// Fake for testing.
-type FakeExec struct {
-	runHook runHook
-}
-type runHook func(cmd string, args ...string) ([]byte, error)
-
-func (f *FakeExec) Run(cmd string, args ...string) ([]byte, error) {
-	if f.runHook != nil {
-		return f.runHook(cmd, args...)
-	}
-	return nil, nil
 }

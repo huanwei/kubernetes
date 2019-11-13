@@ -28,12 +28,12 @@ import (
 	flag "github.com/spf13/pflag"
 	"k8s.io/apimachinery/pkg/util/sets"
 	clientset "k8s.io/client-go/kubernetes"
-	clientcmd "k8s.io/client-go/tools/clientcmd"
+	"k8s.io/client-go/tools/clientcmd"
 	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
 	"k8s.io/klog"
 	kubeadmapi "k8s.io/kubernetes/cmd/kubeadm/app/apis/kubeadm"
 	kubeadmscheme "k8s.io/kubernetes/cmd/kubeadm/app/apis/kubeadm/scheme"
-	kubeadmapiv1beta1 "k8s.io/kubernetes/cmd/kubeadm/app/apis/kubeadm/v1beta1"
+	kubeadmapiv1beta2 "k8s.io/kubernetes/cmd/kubeadm/app/apis/kubeadm/v1beta2"
 	"k8s.io/kubernetes/cmd/kubeadm/app/apis/kubeadm/validation"
 	"k8s.io/kubernetes/cmd/kubeadm/app/cmd/options"
 	phases "k8s.io/kubernetes/cmd/kubeadm/app/cmd/phases/join"
@@ -41,7 +41,6 @@ import (
 	cmdutil "k8s.io/kubernetes/cmd/kubeadm/app/cmd/util"
 	kubeadmconstants "k8s.io/kubernetes/cmd/kubeadm/app/constants"
 	"k8s.io/kubernetes/cmd/kubeadm/app/discovery"
-	kubeadmutil "k8s.io/kubernetes/cmd/kubeadm/app/util"
 	configutil "k8s.io/kubernetes/cmd/kubeadm/app/util/config"
 	kubeconfigutil "k8s.io/kubernetes/cmd/kubeadm/app/util/kubeconfig"
 )
@@ -127,24 +126,23 @@ type joinOptions struct {
 	token                 string
 	controlPlane          bool
 	ignorePreflightErrors []string
-	externalcfg           *kubeadmapiv1beta1.JoinConfiguration
-	certificateKey        string
+	externalcfg           *kubeadmapiv1beta2.JoinConfiguration
+	kustomizeDir          string
 }
 
 // compile-time assert that the local data object satisfies the phases data interface.
 var _ phases.JoinData = &joinData{}
 
-// joinData defines all the runtime information used when running the kubeadm join worklow;
+// joinData defines all the runtime information used when running the kubeadm join workflow;
 // this data is shared across all the phases that are included in the workflow.
 type joinData struct {
 	cfg                   *kubeadmapi.JoinConfiguration
-	skipTokenPrint        bool
 	initCfg               *kubeadmapi.InitConfiguration
 	tlsBootstrapCfg       *clientcmdapi.Config
 	clientSet             *clientset.Clientset
 	ignorePreflightErrors sets.String
 	outputWriter          io.Writer
-	certificateKey        string
+	kustomizeDir          string
 }
 
 // NewCmdJoin returns "kubeadm join" command.
@@ -160,15 +158,18 @@ func NewCmdJoin(out io.Writer, joinOptions *joinOptions) *cobra.Command {
 		Use:   "join [api-server-endpoint]",
 		Short: "Run this on any machine you wish to join an existing cluster",
 		Long:  joinLongDescription,
-		Run: func(cmd *cobra.Command, args []string) {
+		RunE: func(cmd *cobra.Command, args []string) error {
 
 			c, err := joinRunner.InitData(args)
-			kubeadmutil.CheckErr(err)
+			if err != nil {
+				return err
+			}
 
 			data := c.(*joinData)
 
-			err = joinRunner.Run(args)
-			kubeadmutil.CheckErr(err)
+			if err := joinRunner.Run(args); err != nil {
+				return err
+			}
 
 			// if the node is hosting a new control plane instance
 			if data.cfg.ControlPlane != nil {
@@ -182,13 +183,17 @@ func NewCmdJoin(out io.Writer, joinOptions *joinOptions) *cobra.Command {
 					"KubeConfigPath": kubeadmconstants.GetAdminKubeConfigPath(),
 					"etcdMessage":    etcdMessage,
 				}
-				joinControPlaneDoneTemp.Execute(data.outputWriter, ctx)
+				if err := joinControPlaneDoneTemp.Execute(data.outputWriter, ctx); err != nil {
+					return err
+				}
 
 			} else {
 				// otherwise, if the node joined as a worker node;
 				// outputs the join done message and exit
-				fmt.Fprintf(data.outputWriter, joinWorkerNodeDoneMsg)
+				fmt.Fprint(data.outputWriter, joinWorkerNodeDoneMsg)
 			}
+
+			return nil
 		},
 		// We accept the control-plane location as an optional positional argument
 		Args: cobra.MaximumNArgs(1),
@@ -217,10 +222,14 @@ func NewCmdJoin(out io.Writer, joinOptions *joinOptions) *cobra.Command {
 }
 
 // addJoinConfigFlags adds join flags bound to the config to the specified flagset
-func addJoinConfigFlags(flagSet *flag.FlagSet, cfg *kubeadmapiv1beta1.JoinConfiguration) {
+func addJoinConfigFlags(flagSet *flag.FlagSet, cfg *kubeadmapiv1beta2.JoinConfiguration) {
 	flagSet.StringVar(
 		&cfg.NodeRegistration.Name, options.NodeName, cfg.NodeRegistration.Name,
 		`Specify the node name.`,
+	)
+	flagSet.StringVar(
+		&cfg.ControlPlane.CertificateKey, options.CertificateKey, "",
+		"Use this key to decrypt the certificate secrets uploaded by init.",
 	)
 	// add control plane endpoint flags to the specified flagset
 	flagSet.StringVar(
@@ -274,22 +283,19 @@ func addJoinOtherFlags(flagSet *flag.FlagSet, joinOptions *joinOptions) {
 		&joinOptions.controlPlane, options.ControlPlane, joinOptions.controlPlane,
 		"Create a new control plane instance on this node",
 	)
-	flagSet.StringVar(
-		&joinOptions.certificateKey, options.CertificateKey, "",
-		"Use this key to decrypt the certificate secrets uploaded by init.",
-	)
+	options.AddKustomizePodsFlag(flagSet, &joinOptions.kustomizeDir)
 }
 
 // newJoinOptions returns a struct ready for being used for creating cmd join flags.
 func newJoinOptions() *joinOptions {
 	// initialize the public kubeadm config API by applying defaults
-	externalcfg := &kubeadmapiv1beta1.JoinConfiguration{}
+	externalcfg := &kubeadmapiv1beta2.JoinConfiguration{}
 
 	// Add optional config objects to host flags.
 	// un-set objects will be cleaned up afterwards (into newJoinData func)
-	externalcfg.Discovery.File = &kubeadmapiv1beta1.FileDiscovery{}
-	externalcfg.Discovery.BootstrapToken = &kubeadmapiv1beta1.BootstrapTokenDiscovery{}
-	externalcfg.ControlPlane = &kubeadmapiv1beta1.JoinControlPlane{}
+	externalcfg.Discovery.File = &kubeadmapiv1beta2.FileDiscovery{}
+	externalcfg.Discovery.BootstrapToken = &kubeadmapiv1beta2.BootstrapTokenDiscovery{}
+	externalcfg.ControlPlane = &kubeadmapiv1beta2.JoinControlPlane{}
 
 	// Apply defaults
 	kubeadmscheme.Scheme.Default(externalcfg)
@@ -336,6 +342,9 @@ func newJoinData(cmd *cobra.Command, args []string, opt *joinOptions, out io.Wri
 
 	// if not joining a control plane, unset the ControlPlane object
 	if !opt.controlPlane {
+		if opt.externalcfg.ControlPlane != nil {
+			klog.Warningf("[preflight] WARNING: JoinControlPane.controlPlane settings will be ignored when %s flag is not set.", options.ControlPlane)
+		}
 		opt.externalcfg.ControlPlane = nil
 	}
 
@@ -352,12 +361,7 @@ func newJoinData(cmd *cobra.Command, args []string, opt *joinOptions, out io.Wri
 		}
 	}
 
-	ignorePreflightErrorsSet, err := validation.ValidateIgnorePreflightErrors(opt.ignorePreflightErrors)
-	if err != nil {
-		return nil, err
-	}
-
-	if err = validation.ValidateMixedArguments(cmd.Flags()); err != nil {
+	if err := validation.ValidateMixedArguments(cmd.Flags()); err != nil {
 		return nil, err
 	}
 
@@ -377,7 +381,7 @@ func newJoinData(cmd *cobra.Command, args []string, opt *joinOptions, out io.Wri
 			return nil, errors.Errorf("File %s does not exists. Please use 'kubeadm join phase control-plane-prepare' subcommands to generate it.", adminKubeConfigPath)
 		}
 		klog.V(1).Infof("[preflight] found discovery flags missing for this command. using FileDiscovery: %s", adminKubeConfigPath)
-		opt.externalcfg.Discovery.File = &kubeadmapiv1beta1.FileDiscovery{KubeConfigPath: adminKubeConfigPath}
+		opt.externalcfg.Discovery.File = &kubeadmapiv1beta2.FileDiscovery{KubeConfigPath: adminKubeConfigPath}
 		opt.externalcfg.Discovery.BootstrapToken = nil //NB. this could be removed when we get better control on args (e.g. phases without discovery should have NoArgs )
 	}
 
@@ -385,6 +389,13 @@ func newJoinData(cmd *cobra.Command, args []string, opt *joinOptions, out io.Wri
 	if err != nil {
 		return nil, err
 	}
+
+	ignorePreflightErrorsSet, err := validation.ValidateIgnorePreflightErrors(opt.ignorePreflightErrors, cfg.NodeRegistration.IgnorePreflightErrors)
+	if err != nil {
+		return nil, err
+	}
+	// Also set the union of pre-flight errors to JoinConfiguration, to provide a consistent view of the runtime configuration:
+	cfg.NodeRegistration.IgnorePreflightErrors = ignorePreflightErrorsSet.List()
 
 	// override node name and CRI socket from the command line opt
 	if opt.externalcfg.NodeRegistration.Name != "" {
@@ -405,13 +416,16 @@ func newJoinData(cmd *cobra.Command, args []string, opt *joinOptions, out io.Wri
 		tlsBootstrapCfg:       tlsBootstrapCfg,
 		ignorePreflightErrors: ignorePreflightErrorsSet,
 		outputWriter:          out,
-		certificateKey:        opt.certificateKey,
+		kustomizeDir:          opt.kustomizeDir,
 	}, nil
 }
 
 // CertificateKey returns the key used to encrypt the certs.
 func (j *joinData) CertificateKey() string {
-	return j.certificateKey
+	if j.cfg.ControlPlane != nil {
+		return j.cfg.ControlPlane.CertificateKey
+	}
+	return ""
 }
 
 // Cfg returns the JoinConfiguration.
@@ -466,6 +480,11 @@ func (j *joinData) IgnorePreflightErrors() sets.String {
 // OutputWriter returns the io.Writer used to write messages such as the "join done" message.
 func (j *joinData) OutputWriter() io.Writer {
 	return j.outputWriter
+}
+
+// KustomizeDir returns the folder where kustomize patches for static pod manifest are stored
+func (j *joinData) KustomizeDir() string {
+	return j.kustomizeDir
 }
 
 // fetchInitConfigurationFromJoinConfiguration retrieves the init configuration from a join configuration, performing the discovery

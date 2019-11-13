@@ -17,15 +17,16 @@ limitations under the License.
 package common
 
 import (
-	. "github.com/onsi/ginkgo"
+	"github.com/onsi/ginkgo"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/kubernetes/test/e2e/framework"
+	e2enetwork "k8s.io/kubernetes/test/e2e/framework/network"
 )
 
-var _ = Describe("[sig-network] Networking", func() {
+var _ = ginkgo.Describe("[sig-network] Networking", func() {
 	f := framework.NewDefaultFramework("pod-network-test")
 
-	Describe("Granular Checks: Pods", func() {
+	ginkgo.Describe("Granular Checks: Pods", func() {
 
 		// Try to hit all endpoints through a test container, retry 5 times,
 		// expect exactly one unique hostname. Each of these endpoints reports
@@ -38,9 +39,9 @@ var _ = Describe("[sig-network] Networking", func() {
 			This test is marked LinuxOnly since HostNetwork is not supported on other platforms like Windows.
 		*/
 		framework.ConformanceIt("should function for intra-pod communication: http [LinuxOnly] [NodeConformance]", func() {
-			config := framework.NewCoreNetworkingTestConfig(f, true)
+			config := e2enetwork.NewCoreNetworkingTestConfig(f, true)
 			for _, endpointPod := range config.EndpointPods {
-				config.DialFromTestContainer("http", endpointPod.Status.PodIP, framework.EndpointHttpPort, config.MaxTries, 0, sets.NewString(endpointPod.Name))
+				config.DialFromTestContainer("http", endpointPod.Status.PodIP, e2enetwork.EndpointHTTPPort, config.MaxTries, 0, sets.NewString(endpointPod.Name))
 			}
 		})
 
@@ -52,9 +53,9 @@ var _ = Describe("[sig-network] Networking", func() {
 			This test is marked LinuxOnly since HostNetwork is not supported on other platforms like Windows.
 		*/
 		framework.ConformanceIt("should function for intra-pod communication: udp [LinuxOnly] [NodeConformance]", func() {
-			config := framework.NewCoreNetworkingTestConfig(f, true)
+			config := e2enetwork.NewCoreNetworkingTestConfig(f, true)
 			for _, endpointPod := range config.EndpointPods {
-				config.DialFromTestContainer("udp", endpointPod.Status.PodIP, framework.EndpointUdpPort, config.MaxTries, 0, sets.NewString(endpointPod.Name))
+				config.DialFromTestContainer("udp", endpointPod.Status.PodIP, e2enetwork.EndpointUDPPort, config.MaxTries, 0, sets.NewString(endpointPod.Name))
 			}
 		})
 
@@ -66,9 +67,9 @@ var _ = Describe("[sig-network] Networking", func() {
 			This test is marked LinuxOnly since HostNetwork is not supported on other platforms like Windows.
 		*/
 		framework.ConformanceIt("should function for node-pod communication: http [LinuxOnly] [NodeConformance]", func() {
-			config := framework.NewCoreNetworkingTestConfig(f, true)
+			config := e2enetwork.NewCoreNetworkingTestConfig(f, true)
 			for _, endpointPod := range config.EndpointPods {
-				config.DialFromNode("http", endpointPod.Status.PodIP, framework.EndpointHttpPort, config.MaxTries, 0, sets.NewString(endpointPod.Name))
+				config.DialFromNode("http", endpointPod.Status.PodIP, e2enetwork.EndpointHTTPPort, config.MaxTries, 0, sets.NewString(endpointPod.Name))
 			}
 		})
 
@@ -80,9 +81,9 @@ var _ = Describe("[sig-network] Networking", func() {
 			This test is marked LinuxOnly since HostNetwork is not supported on other platforms like Windows.
 		*/
 		framework.ConformanceIt("should function for node-pod communication: udp [LinuxOnly] [NodeConformance]", func() {
-			config := framework.NewCoreNetworkingTestConfig(f, true)
+			config := e2enetwork.NewCoreNetworkingTestConfig(f, true)
 			for _, endpointPod := range config.EndpointPods {
-				config.DialFromNode("udp", endpointPod.Status.PodIP, framework.EndpointUdpPort, config.MaxTries, 0, sets.NewString(endpointPod.Name))
+				config.DialFromNode("udp", endpointPod.Status.PodIP, e2enetwork.EndpointUDPPort, config.MaxTries, 0, sets.NewString(endpointPod.Name))
 			}
 		})
 	})

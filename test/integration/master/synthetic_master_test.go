@@ -18,6 +18,7 @@ package master
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
@@ -34,7 +35,6 @@ import (
 	"sigs.k8s.io/yaml"
 
 	appsv1 "k8s.io/api/apps/v1"
-	"k8s.io/api/core/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -45,11 +45,9 @@ import (
 	"k8s.io/apiserver/pkg/authorization/authorizer"
 	"k8s.io/apiserver/pkg/authorization/authorizerfactory"
 	"k8s.io/apiserver/plugin/pkg/authenticator/token/tokentest"
-	clientsetv1 "k8s.io/client-go/kubernetes"
+	clientset "k8s.io/client-go/kubernetes"
 	clienttypedv1 "k8s.io/client-go/kubernetes/typed/core/v1"
 	restclient "k8s.io/client-go/rest"
-	api "k8s.io/kubernetes/pkg/apis/core"
-	clientset "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset"
 	"k8s.io/kubernetes/pkg/master"
 	"k8s.io/kubernetes/test/integration"
 	"k8s.io/kubernetes/test/integration/framework"
@@ -62,7 +60,7 @@ const (
 
 type allowAliceAuthorizer struct{}
 
-func (allowAliceAuthorizer) Authorize(a authorizer.Attributes) (authorizer.Decision, string, error) {
+func (allowAliceAuthorizer) Authorize(ctx context.Context, a authorizer.Attributes) (authorizer.Decision, string, error) {
 	if a.GetUser() != nil && a.GetUser().GetName() == "alice" {
 		return authorizer.DecisionAllow, "", nil
 	}
@@ -104,7 +102,7 @@ func TestKubernetesService(t *testing.T) {
 	defer closeFn()
 	coreClient := clientset.NewForConfigOrDie(config.GenericConfig.LoopbackClientConfig)
 	err := wait.PollImmediate(time.Millisecond*100, wait.ForeverTestTimeout, func() (bool, error) {
-		if _, err := coreClient.Core().Services(metav1.NamespaceDefault).Get("kubernetes", metav1.GetOptions{}); err != nil && errors.IsNotFound(err) {
+		if _, err := coreClient.CoreV1().Services(metav1.NamespaceDefault).Get("kubernetes", metav1.GetOptions{}); err != nil && errors.IsNotFound(err) {
 			return false, nil
 		} else if err != nil {
 			return false, err
@@ -306,33 +304,39 @@ func TestObjectSizeResponses(t *testing.T) {
 	_, s, closeFn := framework.RunAMaster(nil)
 	defer closeFn()
 
-	client := clientsetv1.NewForConfigOrDie(&restclient.Config{Host: s.URL})
+	client := clientset.NewForConfigOrDie(&restclient.Config{Host: s.URL})
 
 	const DeploymentMegabyteSize = 100000
-	const DeploymentTwoMegabyteSize = 1000000
+	const DeploymentTwoMegabyteSize = 175000
+	const DeploymentThreeMegabyteSize = 250000
 
 	expectedMsgFor1MB := `etcdserver: request is too large`
 	expectedMsgFor2MB := `rpc error: code = ResourceExhausted desc = trying to send message larger than max`
-	expectedMsgForLargeAnnotation := `metadata.annotations: Too long: must have at most 262144 characters`
+	expectedMsgFor3MB := `Request entity too large: limit is 3145728`
+	expectedMsgForLargeAnnotation := `metadata.annotations: Too long: must have at most 262144 bytes`
 
-	deployment1 := constructBody("a", DeploymentMegabyteSize, "labels", t)    // >1 MB file
-	deployment2 := constructBody("a", DeploymentTwoMegabyteSize, "labels", t) // >2 MB file
+	deployment1 := constructBody("a", DeploymentMegabyteSize, "labels", t)      // >1 MB file
+	deployment2 := constructBody("a", DeploymentTwoMegabyteSize, "labels", t)   // >2 MB file
+	deployment3 := constructBody("a", DeploymentThreeMegabyteSize, "labels", t) // >3 MB file
 
-	deployment3 := constructBody("a", DeploymentMegabyteSize, "annotations", t)
+	deployment4 := constructBody("a", DeploymentMegabyteSize, "annotations", t)
 
-	deployment4 := constructBody("sample/sample", DeploymentMegabyteSize, "finalizers", t)    // >1 MB file
-	deployment5 := constructBody("sample/sample", DeploymentTwoMegabyteSize, "finalizers", t) // >2 MB file
+	deployment5 := constructBody("sample/sample", DeploymentMegabyteSize, "finalizers", t)      // >1 MB file
+	deployment6 := constructBody("sample/sample", DeploymentTwoMegabyteSize, "finalizers", t)   // >2 MB file
+	deployment7 := constructBody("sample/sample", DeploymentThreeMegabyteSize, "finalizers", t) // >3 MB file
 
 	requests := []struct {
 		size             string
 		deploymentObject *appsv1.Deployment
 		expectedMessage  string
 	}{
-		{"1 MB", deployment1, expectedMsgFor1MB},
-		{"2 MB", deployment2, expectedMsgFor2MB},
-		{"1 MB", deployment3, expectedMsgForLargeAnnotation},
-		{"1 MB", deployment4, expectedMsgFor1MB},
-		{"2 MB", deployment5, expectedMsgFor2MB},
+		{"1 MB labels", deployment1, expectedMsgFor1MB},
+		{"2 MB labels", deployment2, expectedMsgFor2MB},
+		{"3 MB labels", deployment3, expectedMsgFor3MB},
+		{"1 MB annotations", deployment4, expectedMsgForLargeAnnotation},
+		{"1 MB finalizers", deployment5, expectedMsgFor1MB},
+		{"2 MB finalizers", deployment6, expectedMsgFor2MB},
+		{"3 MB finalizers", deployment7, expectedMsgFor3MB},
 	}
 
 	for _, r := range requests {
@@ -378,33 +382,6 @@ var hpaV1 = `
     "minReplicas": 1,
     "maxReplicas": 10,
     "targetCPUUtilizationPercentage": 50
-  }
-}
-`
-
-var deploymentExtensions = `
-{
-  "apiVersion": "extensions/v1beta1",
-  "kind": "Deployment",
-  "metadata": {
-     "name": "test-deployment1",
-     "namespace": "default"
-  },
-  "spec": {
-    "replicas": 1,
-    "template": {
-      "metadata": {
-        "labels": {
-          "app": "nginx0"
-        }
-      },
-      "spec": {
-        "containers": [{
-          "name": "nginx",
-          "image": "k8s.gcr.io/nginx:1.7.9"
-        }]
-      }
-    }
   }
 }
 `
@@ -526,15 +503,9 @@ func TestAppsGroupBackwardCompatibility(t *testing.T) {
 		expectedStatusCodes map[int]bool
 		expectedVersion     string
 	}{
-		// Post to extensions endpoint and get back from both: extensions and apps
-		{"POST", extensionsPath("deployments", metav1.NamespaceDefault, ""), deploymentExtensions, integration.Code201, ""},
-		{"GET", extensionsPath("deployments", metav1.NamespaceDefault, "test-deployment1"), "", integration.Code200, "extensions/v1beta1"},
-		{"GET", appsPath("deployments", metav1.NamespaceDefault, "test-deployment1"), "", integration.Code200, "apps/v1"},
-		{"DELETE", extensionsPath("deployments", metav1.NamespaceDefault, "test-deployment1"), "", integration.Code200, "extensions/v1beta1"},
-		// Post to apps endpoint and get back from both: apps and extensions
+		// Post to apps endpoint and get back from apps
 		{"POST", appsPath("deployments", metav1.NamespaceDefault, ""), deploymentApps, integration.Code201, ""},
 		{"GET", appsPath("deployments", metav1.NamespaceDefault, "test-deployment2"), "", integration.Code200, "apps/v1"},
-		{"GET", extensionsPath("deployments", metav1.NamespaceDefault, "test-deployment2"), "", integration.Code200, "extensions/v1beta1"},
 		// set propagationPolicy=Orphan to force the object to be returned so we can check the apiVersion (otherwise, we just get a status object back)
 		{"DELETE", appsPath("deployments", metav1.NamespaceDefault, "test-deployment2") + "?propagationPolicy=Orphan", "", integration.Code200, "apps/v1"},
 	}
@@ -638,7 +609,7 @@ func TestAccept(t *testing.T) {
 	}
 }
 
-func countEndpoints(eps *api.Endpoints) int {
+func countEndpoints(eps *corev1.Endpoints) int {
 	count := 0
 	for i := range eps.Subsets {
 		count += len(eps.Subsets[i].Addresses) * len(eps.Subsets[i].Ports)
@@ -653,7 +624,7 @@ func TestMasterService(t *testing.T) {
 	client := clientset.NewForConfigOrDie(&restclient.Config{Host: s.URL})
 
 	err := wait.Poll(time.Second, time.Minute, func() (bool, error) {
-		svcList, err := client.Core().Services(metav1.NamespaceDefault).List(metav1.ListOptions{})
+		svcList, err := client.CoreV1().Services(metav1.NamespaceDefault).List(metav1.ListOptions{})
 		if err != nil {
 			t.Errorf("unexpected error: %v", err)
 			return false, nil
@@ -666,7 +637,7 @@ func TestMasterService(t *testing.T) {
 			}
 		}
 		if found {
-			ep, err := client.Core().Endpoints(metav1.NamespaceDefault).Get("kubernetes", metav1.GetOptions{})
+			ep, err := client.CoreV1().Endpoints(metav1.NamespaceDefault).Get("kubernetes", metav1.GetOptions{})
 			if err != nil {
 				return false, nil
 			}
@@ -694,14 +665,14 @@ func TestServiceAlloc(t *testing.T) {
 
 	client := clientset.NewForConfigOrDie(&restclient.Config{Host: s.URL})
 
-	svc := func(i int) *api.Service {
-		return &api.Service{
+	svc := func(i int) *corev1.Service {
+		return &corev1.Service{
 			ObjectMeta: metav1.ObjectMeta{
 				Name: fmt.Sprintf("svc-%v", i),
 			},
-			Spec: api.ServiceSpec{
-				Type: api.ServiceTypeClusterIP,
-				Ports: []api.ServicePort{
+			Spec: corev1.ServiceSpec{
+				Type: corev1.ServiceTypeClusterIP,
+				Ports: []corev1.ServicePort{
 					{Port: 80},
 				},
 			},
@@ -710,7 +681,7 @@ func TestServiceAlloc(t *testing.T) {
 
 	// Wait until the default "kubernetes" service is created.
 	if err = wait.Poll(250*time.Millisecond, time.Minute, func() (bool, error) {
-		_, err := client.Core().Services(metav1.NamespaceDefault).Get("kubernetes", metav1.GetOptions{})
+		_, err := client.CoreV1().Services(metav1.NamespaceDefault).Get("kubernetes", metav1.GetOptions{})
 		if err != nil && !errors.IsNotFound(err) {
 			return false, err
 		}
@@ -721,18 +692,18 @@ func TestServiceAlloc(t *testing.T) {
 
 	// make 5 more services to take up all IPs
 	for i := 0; i < 5; i++ {
-		if _, err := client.Core().Services(metav1.NamespaceDefault).Create(svc(i)); err != nil {
+		if _, err := client.CoreV1().Services(metav1.NamespaceDefault).Create(svc(i)); err != nil {
 			t.Error(err)
 		}
 	}
 
 	// Make another service. It will fail because we're out of cluster IPs
-	if _, err := client.Core().Services(metav1.NamespaceDefault).Create(svc(8)); err != nil {
+	if _, err := client.CoreV1().Services(metav1.NamespaceDefault).Create(svc(8)); err != nil {
 		if !strings.Contains(err.Error(), "range is full") {
 			t.Errorf("unexpected error text: %v", err)
 		}
 	} else {
-		svcs, err := client.Core().Services(metav1.NamespaceAll).List(metav1.ListOptions{})
+		svcs, err := client.CoreV1().Services(metav1.NamespaceAll).List(metav1.ListOptions{})
 		if err != nil {
 			t.Fatalf("unexpected success, and error getting the services: %v", err)
 		}
@@ -744,12 +715,12 @@ func TestServiceAlloc(t *testing.T) {
 	}
 
 	// Delete the first service.
-	if err := client.Core().Services(metav1.NamespaceDefault).Delete(svc(1).ObjectMeta.Name, nil); err != nil {
+	if err := client.CoreV1().Services(metav1.NamespaceDefault).Delete(svc(1).ObjectMeta.Name, nil); err != nil {
 		t.Fatalf("got unexpected error: %v", err)
 	}
 
 	// This time creating the second service should work.
-	if _, err := client.Core().Services(metav1.NamespaceDefault).Create(svc(8)); err != nil {
+	if _, err := client.CoreV1().Services(metav1.NamespaceDefault).Create(svc(8)); err != nil {
 		t.Fatalf("got unexpected error: %v", err)
 	}
 }
@@ -779,7 +750,7 @@ func TestUpdateNodeObjects(t *testing.T) {
 
 	for i := 0; i < nodes*6; i++ {
 		c.Nodes().Delete(fmt.Sprintf("node-%d", i), nil)
-		_, err := c.Nodes().Create(&v1.Node{
+		_, err := c.Nodes().Create(&corev1.Node{
 			ObjectMeta: metav1.ObjectMeta{
 				Name: fmt.Sprintf("node-%d", i),
 			},
@@ -812,7 +783,7 @@ func TestUpdateNodeObjects(t *testing.T) {
 			i := 0
 			for r := range w.ResultChan() {
 				i++
-				if _, ok := r.Object.(*v1.Node); !ok {
+				if _, ok := r.Object.(*corev1.Node); !ok {
 					fmt.Printf("[watch:%d] unexpected object after %d: %#v\n", lister, i, r)
 				}
 				if i%100 == 0 {
@@ -867,24 +838,24 @@ func TestUpdateNodeObjects(t *testing.T) {
 				switch {
 				case i%4 == 0:
 					lastCount = 1
-					n.Status.Conditions = []v1.NodeCondition{
+					n.Status.Conditions = []corev1.NodeCondition{
 						{
-							Type:   v1.NodeReady,
-							Status: v1.ConditionTrue,
+							Type:   corev1.NodeReady,
+							Status: corev1.ConditionTrue,
 							Reason: "foo",
 						},
 					}
 				case i%4 == 1:
 					lastCount = 2
-					n.Status.Conditions = []v1.NodeCondition{
+					n.Status.Conditions = []corev1.NodeCondition{
 						{
-							Type:   v1.NodeReady,
-							Status: v1.ConditionFalse,
+							Type:   corev1.NodeReady,
+							Status: corev1.ConditionFalse,
 							Reason: "foo",
 						},
 						{
-							Type:   v1.NodeDiskPressure,
-							Status: v1.ConditionTrue,
+							Type:   corev1.NodeDiskPressure,
+							Status: corev1.ConditionTrue,
 							Reason: "bar",
 						},
 					}

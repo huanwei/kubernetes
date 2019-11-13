@@ -24,7 +24,7 @@ import (
 	gcm "google.golang.org/api/monitoring/v3"
 	appsv1 "k8s.io/api/apps/v1"
 	as "k8s.io/api/autoscaling/v2beta1"
-	corev1 "k8s.io/api/core/v1"
+	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/wait"
@@ -32,7 +32,7 @@ import (
 	"k8s.io/kubernetes/test/e2e/framework"
 	"k8s.io/kubernetes/test/e2e/instrumentation/monitoring"
 
-	. "github.com/onsi/ginkgo"
+	"github.com/onsi/ginkgo"
 	"golang.org/x/oauth2/google"
 )
 
@@ -44,13 +44,13 @@ const (
 )
 
 var _ = SIGDescribe("[HPA] Horizontal pod autoscaling (scale resource: Custom Metrics from Stackdriver)", func() {
-	BeforeEach(func() {
+	ginkgo.BeforeEach(func() {
 		framework.SkipUnlessProviderIs("gce", "gke")
 	})
 
 	f := framework.NewDefaultFramework("horizontal-pod-autoscaling")
 
-	It("should scale down with Custom Metric of type Pod from Stackdriver [Feature:CustomMetricsAutoscaling]", func() {
+	ginkgo.It("should scale down with Custom Metric of type Pod from Stackdriver [Feature:CustomMetricsAutoscaling]", func() {
 		initialReplicas := 2
 		// metric should cause scale down
 		metricValue := int64(100)
@@ -65,7 +65,7 @@ var _ = SIGDescribe("[HPA] Horizontal pod autoscaling (scale resource: Custom Me
 		tc.Run()
 	})
 
-	It("should scale down with Custom Metric of type Object from Stackdriver [Feature:CustomMetricsAutoscaling]", func() {
+	ginkgo.It("should scale down with Custom Metric of type Object from Stackdriver [Feature:CustomMetricsAutoscaling]", func() {
 		initialReplicas := 2
 		// metric should cause scale down
 		metricValue := int64(100)
@@ -82,7 +82,7 @@ var _ = SIGDescribe("[HPA] Horizontal pod autoscaling (scale resource: Custom Me
 		tc.Run()
 	})
 
-	It("should scale down with External Metric with target value from Stackdriver [Feature:CustomMetricsAutoscaling]", func() {
+	ginkgo.It("should scale down with External Metric with target value from Stackdriver [Feature:CustomMetricsAutoscaling]", func() {
 		initialReplicas := 2
 		// metric should cause scale down
 		metricValue := externalMetricValue
@@ -105,7 +105,7 @@ var _ = SIGDescribe("[HPA] Horizontal pod autoscaling (scale resource: Custom Me
 		tc.Run()
 	})
 
-	It("should scale down with External Metric with target average value from Stackdriver [Feature:CustomMetricsAutoscaling]", func() {
+	ginkgo.It("should scale down with External Metric with target average value from Stackdriver [Feature:CustomMetricsAutoscaling]", func() {
 		initialReplicas := 2
 		// metric should cause scale down
 		metricValue := externalMetricValue
@@ -128,7 +128,7 @@ var _ = SIGDescribe("[HPA] Horizontal pod autoscaling (scale resource: Custom Me
 		tc.Run()
 	})
 
-	It("should scale down with Custom Metric of type Pod from Stackdriver with Prometheus [Feature:CustomMetricsAutoscaling]", func() {
+	ginkgo.It("should scale down with Custom Metric of type Pod from Stackdriver with Prometheus [Feature:CustomMetricsAutoscaling]", func() {
 		initialReplicas := 2
 		// metric should cause scale down
 		metricValue := int64(100)
@@ -143,7 +143,7 @@ var _ = SIGDescribe("[HPA] Horizontal pod autoscaling (scale resource: Custom Me
 		tc.Run()
 	})
 
-	It("should scale up with two metrics of type Pod from Stackdriver [Feature:CustomMetricsAutoscaling]", func() {
+	ginkgo.It("should scale up with two metrics of type Pod from Stackdriver [Feature:CustomMetricsAutoscaling]", func() {
 		initialReplicas := 1
 		// metric 1 would cause a scale down, if not for metric 2
 		metric1Value := int64(100)
@@ -174,7 +174,7 @@ var _ = SIGDescribe("[HPA] Horizontal pod autoscaling (scale resource: Custom Me
 		tc.Run()
 	})
 
-	It("should scale up with two External metrics from Stackdriver [Feature:CustomMetricsAutoscaling]", func() {
+	ginkgo.It("should scale up with two External metrics from Stackdriver [Feature:CustomMetricsAutoscaling]", func() {
 		initialReplicas := 1
 		// metric 1 would cause a scale down, if not for metric 2
 		metric1Value := externalMetricValue
@@ -215,18 +215,20 @@ var _ = SIGDescribe("[HPA] Horizontal pod autoscaling (scale resource: Custom Me
 	})
 })
 
+// CustomMetricTestCase is a struct for test cases.
 type CustomMetricTestCase struct {
 	framework       *framework.Framework
 	hpa             *as.HorizontalPodAutoscaler
 	kubeClient      clientset.Interface
 	deployment      *appsv1.Deployment
-	pod             *corev1.Pod
+	pod             *v1.Pod
 	initialReplicas int
 	scaledReplicas  int
 }
 
+// Run starts test case.
 func (tc *CustomMetricTestCase) Run() {
-	projectId := framework.TestContext.CloudConfig.ProjectID
+	projectID := framework.TestContext.CloudConfig.ProjectID
 
 	ctx := context.Background()
 	client, err := google.DefaultClient(ctx, gcm.CloudPlatformScope)
@@ -250,11 +252,11 @@ func (tc *CustomMetricTestCase) Run() {
 	}
 
 	// Set up a cluster: create a custom metric and set up k8s-sd adapter
-	err = monitoring.CreateDescriptors(gcmService, projectId)
+	err = monitoring.CreateDescriptors(gcmService, projectID)
 	if err != nil {
 		framework.Failf("Failed to create metric descriptor: %v", err)
 	}
-	defer monitoring.CleanupDescriptors(gcmService, projectId)
+	defer monitoring.CleanupDescriptors(gcmService, projectID)
 
 	err = monitoring.CreateAdapter(monitoring.AdapterDefault)
 	if err != nil {
@@ -282,7 +284,7 @@ func (tc *CustomMetricTestCase) Run() {
 	waitForReplicas(tc.deployment.ObjectMeta.Name, tc.framework.Namespace.ObjectMeta.Name, tc.kubeClient, 15*time.Minute, tc.scaledReplicas)
 }
 
-func createDeploymentToScale(f *framework.Framework, cs clientset.Interface, deployment *appsv1.Deployment, pod *corev1.Pod) error {
+func createDeploymentToScale(f *framework.Framework, cs clientset.Interface, deployment *appsv1.Deployment, pod *v1.Pod) error {
 	if deployment != nil {
 		_, err := cs.AppsV1().Deployments(f.Namespace.ObjectMeta.Name).Create(deployment)
 		if err != nil {
@@ -298,7 +300,7 @@ func createDeploymentToScale(f *framework.Framework, cs clientset.Interface, dep
 	return nil
 }
 
-func cleanupDeploymentsToScale(f *framework.Framework, cs clientset.Interface, deployment *appsv1.Deployment, pod *corev1.Pod) {
+func cleanupDeploymentsToScale(f *framework.Framework, cs clientset.Interface, deployment *appsv1.Deployment, pod *v1.Pod) {
 	if deployment != nil {
 		_ = cs.AppsV1().Deployments(f.Namespace.ObjectMeta.Name).Delete(deployment.ObjectMeta.Name, &metav1.DeleteOptions{})
 	}

@@ -23,8 +23,10 @@ import (
 	"testing"
 	"time"
 
+	coordination "k8s.io/api/coordination/v1"
+	corev1 "k8s.io/api/core/v1"
+	policy "k8s.io/api/policy/v1beta1"
 	storagev1 "k8s.io/api/storage/v1"
-	storagev1beta1 "k8s.io/api/storage/v1beta1"
 	apiextensionsv1beta1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1beta1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -33,15 +35,10 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
-	utilfeaturetesting "k8s.io/apiserver/pkg/util/feature/testing"
-	externalclientset "k8s.io/client-go/kubernetes"
+	clientset "k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/kubernetes/scheme"
+	featuregatetesting "k8s.io/component-base/featuregate/testing"
 	kubeapiservertesting "k8s.io/kubernetes/cmd/kube-apiserver/app/testing"
-	"k8s.io/kubernetes/pkg/api/legacyscheme"
-	"k8s.io/kubernetes/pkg/apis/coordination"
-	"k8s.io/kubernetes/pkg/apis/core"
-	api "k8s.io/kubernetes/pkg/apis/core"
-	"k8s.io/kubernetes/pkg/apis/policy"
-	clientset "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset"
 	"k8s.io/kubernetes/pkg/features"
 	"k8s.io/kubernetes/test/integration/framework"
 	"k8s.io/utils/pointer"
@@ -57,13 +54,10 @@ func TestNodeAuthorizer(t *testing.T) {
 	)
 
 	// Enable DynamicKubeletConfig feature so that Node.Spec.ConfigSource can be set
-	defer utilfeaturetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.DynamicKubeletConfig, true)()
-
-	// Enable NodeLease feature so that nodes can create leases
-	defer utilfeaturetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.NodeLease, true)()
+	defer featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.DynamicKubeletConfig, true)()
 
 	// Enable CSINodeInfo feature so that nodes can create CSINode objects.
-	defer utilfeaturetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.CSINodeInfo, true)()
+	defer featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.CSINodeInfo, true)()
 
 	tokenFile, err := ioutil.TempFile("", "kubeconfig")
 	if err != nil {
@@ -93,7 +87,7 @@ func TestNodeAuthorizer(t *testing.T) {
 
 	// Wait for a healthy server
 	for {
-		result := superuserClient.Core().RESTClient().Get().AbsPath("/healthz").Do()
+		result := superuserClient.CoreV1().RESTClient().Get().AbsPath("/healthz").Do()
 		_, err := result.Raw()
 		if err == nil {
 			break
@@ -103,20 +97,20 @@ func TestNodeAuthorizer(t *testing.T) {
 	}
 
 	// Create objects
-	if _, err := superuserClient.Core().Namespaces().Create(&core.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "ns"}}); err != nil {
+	if _, err := superuserClient.CoreV1().Namespaces().Create(&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "ns"}}); err != nil {
 		t.Fatal(err)
 	}
 
-	if _, err := superuserClient.Core().Secrets("ns").Create(&api.Secret{ObjectMeta: metav1.ObjectMeta{Name: "mysecret"}}); err != nil {
+	if _, err := superuserClient.CoreV1().Secrets("ns").Create(&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "mysecret"}}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := superuserClient.Core().Secrets("ns").Create(&api.Secret{ObjectMeta: metav1.ObjectMeta{Name: "mypvsecret"}}); err != nil {
+	if _, err := superuserClient.CoreV1().Secrets("ns").Create(&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "mypvsecret"}}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := superuserClient.Core().ConfigMaps("ns").Create(&api.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "myconfigmap"}}); err != nil {
+	if _, err := superuserClient.CoreV1().ConfigMaps("ns").Create(&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "myconfigmap"}}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := superuserClient.Core().ConfigMaps("ns").Create(&api.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "myconfigmapconfigsource"}}); err != nil {
+	if _, err := superuserClient.CoreV1().ConfigMaps("ns").Create(&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "myconfigmapconfigsource"}}); err != nil {
 		t.Fatal(err)
 	}
 	pvName := "mypv"
@@ -130,23 +124,23 @@ func TestNodeAuthorizer(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := superuserClient.Core().PersistentVolumeClaims("ns").Create(&api.PersistentVolumeClaim{
+	if _, err := superuserClient.CoreV1().PersistentVolumeClaims("ns").Create(&corev1.PersistentVolumeClaim{
 		ObjectMeta: metav1.ObjectMeta{Name: "mypvc"},
-		Spec: api.PersistentVolumeClaimSpec{
-			AccessModes: []api.PersistentVolumeAccessMode{api.ReadOnlyMany},
-			Resources:   api.ResourceRequirements{Requests: api.ResourceList{api.ResourceStorage: resource.MustParse("1")}},
+		Spec: corev1.PersistentVolumeClaimSpec{
+			AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadOnlyMany},
+			Resources:   corev1.ResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceStorage: resource.MustParse("1")}},
 		},
 	}); err != nil {
 		t.Fatal(err)
 	}
 
-	if _, err := superuserClient.Core().PersistentVolumes().Create(&api.PersistentVolume{
+	if _, err := superuserClient.CoreV1().PersistentVolumes().Create(&corev1.PersistentVolume{
 		ObjectMeta: metav1.ObjectMeta{Name: "mypv"},
-		Spec: api.PersistentVolumeSpec{
-			AccessModes:            []api.PersistentVolumeAccessMode{api.ReadOnlyMany},
-			Capacity:               api.ResourceList{api.ResourceStorage: resource.MustParse("1")},
-			ClaimRef:               &api.ObjectReference{Namespace: "ns", Name: "mypvc"},
-			PersistentVolumeSource: api.PersistentVolumeSource{AzureFile: &api.AzureFilePersistentVolumeSource{ShareName: "default", SecretName: "mypvsecret"}},
+		Spec: corev1.PersistentVolumeSpec{
+			AccessModes:            []corev1.PersistentVolumeAccessMode{corev1.ReadOnlyMany},
+			Capacity:               corev1.ResourceList{corev1.ResourceStorage: resource.MustParse("1")},
+			ClaimRef:               &corev1.ObjectReference{Namespace: "ns", Name: "mypvc"},
+			PersistentVolumeSource: corev1.PersistentVolumeSource{AzureFile: &corev1.AzureFilePersistentVolumeSource{ShareName: "default", SecretName: "mypvsecret"}},
 		},
 	}); err != nil {
 		t.Fatal(err)
@@ -154,41 +148,41 @@ func TestNodeAuthorizer(t *testing.T) {
 
 	getSecret := func(client clientset.Interface) func() error {
 		return func() error {
-			_, err := client.Core().Secrets("ns").Get("mysecret", metav1.GetOptions{})
+			_, err := client.CoreV1().Secrets("ns").Get("mysecret", metav1.GetOptions{})
 			return err
 		}
 	}
 	getPVSecret := func(client clientset.Interface) func() error {
 		return func() error {
-			_, err := client.Core().Secrets("ns").Get("mypvsecret", metav1.GetOptions{})
+			_, err := client.CoreV1().Secrets("ns").Get("mypvsecret", metav1.GetOptions{})
 			return err
 		}
 	}
 	getConfigMap := func(client clientset.Interface) func() error {
 		return func() error {
-			_, err := client.Core().ConfigMaps("ns").Get("myconfigmap", metav1.GetOptions{})
+			_, err := client.CoreV1().ConfigMaps("ns").Get("myconfigmap", metav1.GetOptions{})
 			return err
 		}
 	}
 	getConfigMapConfigSource := func(client clientset.Interface) func() error {
 		return func() error {
-			_, err := client.Core().ConfigMaps("ns").Get("myconfigmapconfigsource", metav1.GetOptions{})
+			_, err := client.CoreV1().ConfigMaps("ns").Get("myconfigmapconfigsource", metav1.GetOptions{})
 			return err
 		}
 	}
 	getPVC := func(client clientset.Interface) func() error {
 		return func() error {
-			_, err := client.Core().PersistentVolumeClaims("ns").Get("mypvc", metav1.GetOptions{})
+			_, err := client.CoreV1().PersistentVolumeClaims("ns").Get("mypvc", metav1.GetOptions{})
 			return err
 		}
 	}
 	getPV := func(client clientset.Interface) func() error {
 		return func() error {
-			_, err := client.Core().PersistentVolumes().Get("mypv", metav1.GetOptions{})
+			_, err := client.CoreV1().PersistentVolumes().Get("mypv", metav1.GetOptions{})
 			return err
 		}
 	}
-	getVolumeAttachment := func(client externalclientset.Interface) func() error {
+	getVolumeAttachment := func(client clientset.Interface) func() error {
 		return func() error {
 			_, err := client.StorageV1().VolumeAttachments().Get("myattachment", metav1.GetOptions{})
 			return err
@@ -197,15 +191,15 @@ func TestNodeAuthorizer(t *testing.T) {
 
 	createNode2NormalPod := func(client clientset.Interface) func() error {
 		return func() error {
-			_, err := client.Core().Pods("ns").Create(&api.Pod{
+			_, err := client.CoreV1().Pods("ns").Create(&corev1.Pod{
 				ObjectMeta: metav1.ObjectMeta{Name: "node2normalpod"},
-				Spec: api.PodSpec{
+				Spec: corev1.PodSpec{
 					NodeName:   "node2",
-					Containers: []api.Container{{Name: "image", Image: "busybox"}},
-					Volumes: []api.Volume{
-						{Name: "secret", VolumeSource: api.VolumeSource{Secret: &api.SecretVolumeSource{SecretName: "mysecret"}}},
-						{Name: "cm", VolumeSource: api.VolumeSource{ConfigMap: &api.ConfigMapVolumeSource{LocalObjectReference: api.LocalObjectReference{Name: "myconfigmap"}}}},
-						{Name: "pvc", VolumeSource: api.VolumeSource{PersistentVolumeClaim: &api.PersistentVolumeClaimVolumeSource{ClaimName: "mypvc"}}},
+					Containers: []corev1.Container{{Name: "image", Image: "busybox"}},
+					Volumes: []corev1.Volume{
+						{Name: "secret", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: "mysecret"}}},
+						{Name: "cm", VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{LocalObjectReference: corev1.LocalObjectReference{Name: "myconfigmap"}}}},
+						{Name: "pvc", VolumeSource: corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: "mypvc"}}},
 					},
 				},
 			})
@@ -215,9 +209,9 @@ func TestNodeAuthorizer(t *testing.T) {
 	updateNode2NormalPodStatus := func(client clientset.Interface) func() error {
 		return func() error {
 			startTime := metav1.NewTime(time.Now())
-			_, err := client.Core().Pods("ns").UpdateStatus(&api.Pod{
+			_, err := client.CoreV1().Pods("ns").UpdateStatus(&corev1.Pod{
 				ObjectMeta: metav1.ObjectMeta{Name: "node2normalpod"},
-				Status:     api.PodStatus{StartTime: &startTime},
+				Status:     corev1.PodStatus{StartTime: &startTime},
 			})
 			return err
 		}
@@ -225,20 +219,20 @@ func TestNodeAuthorizer(t *testing.T) {
 	deleteNode2NormalPod := func(client clientset.Interface) func() error {
 		return func() error {
 			zero := int64(0)
-			return client.Core().Pods("ns").Delete("node2normalpod", &metav1.DeleteOptions{GracePeriodSeconds: &zero})
+			return client.CoreV1().Pods("ns").Delete("node2normalpod", &metav1.DeleteOptions{GracePeriodSeconds: &zero})
 		}
 	}
 
 	createNode2MirrorPod := func(client clientset.Interface) func() error {
 		return func() error {
-			_, err := client.Core().Pods("ns").Create(&api.Pod{
+			_, err := client.CoreV1().Pods("ns").Create(&corev1.Pod{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:        "node2mirrorpod",
-					Annotations: map[string]string{api.MirrorPodAnnotationKey: "true"},
+					Annotations: map[string]string{corev1.MirrorPodAnnotationKey: "true"},
 				},
-				Spec: api.PodSpec{
+				Spec: corev1.PodSpec{
 					NodeName:   "node2",
-					Containers: []api.Container{{Name: "image", Image: "busybox"}},
+					Containers: []corev1.Container{{Name: "image", Image: "busybox"}},
 				},
 			})
 			return err
@@ -247,62 +241,62 @@ func TestNodeAuthorizer(t *testing.T) {
 	deleteNode2MirrorPod := func(client clientset.Interface) func() error {
 		return func() error {
 			zero := int64(0)
-			return client.Core().Pods("ns").Delete("node2mirrorpod", &metav1.DeleteOptions{GracePeriodSeconds: &zero})
+			return client.CoreV1().Pods("ns").Delete("node2mirrorpod", &metav1.DeleteOptions{GracePeriodSeconds: &zero})
 		}
 	}
 
 	createNode2 := func(client clientset.Interface) func() error {
 		return func() error {
-			_, err := client.Core().Nodes().Create(&api.Node{ObjectMeta: metav1.ObjectMeta{Name: "node2"}})
+			_, err := client.CoreV1().Nodes().Create(&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node2"}})
 			return err
 		}
 	}
 	setNode2ConfigSource := func(client clientset.Interface) func() error {
 		return func() error {
-			node2, err := client.Core().Nodes().Get("node2", metav1.GetOptions{})
+			node2, err := client.CoreV1().Nodes().Get("node2", metav1.GetOptions{})
 			if err != nil {
 				return err
 			}
-			node2.Spec.ConfigSource = &api.NodeConfigSource{
-				ConfigMap: &api.ConfigMapNodeConfigSource{
+			node2.Spec.ConfigSource = &corev1.NodeConfigSource{
+				ConfigMap: &corev1.ConfigMapNodeConfigSource{
 					Namespace:        "ns",
 					Name:             "myconfigmapconfigsource",
 					KubeletConfigKey: "kubelet",
 				},
 			}
-			_, err = client.Core().Nodes().Update(node2)
+			_, err = client.CoreV1().Nodes().Update(node2)
 			return err
 		}
 	}
 	unsetNode2ConfigSource := func(client clientset.Interface) func() error {
 		return func() error {
-			node2, err := client.Core().Nodes().Get("node2", metav1.GetOptions{})
+			node2, err := client.CoreV1().Nodes().Get("node2", metav1.GetOptions{})
 			if err != nil {
 				return err
 			}
 			node2.Spec.ConfigSource = nil
-			_, err = client.Core().Nodes().Update(node2)
+			_, err = client.CoreV1().Nodes().Update(node2)
 			return err
 		}
 	}
 	updateNode2Status := func(client clientset.Interface) func() error {
 		return func() error {
-			_, err := client.Core().Nodes().UpdateStatus(&api.Node{
+			_, err := client.CoreV1().Nodes().UpdateStatus(&corev1.Node{
 				ObjectMeta: metav1.ObjectMeta{Name: "node2"},
-				Status:     api.NodeStatus{},
+				Status:     corev1.NodeStatus{},
 			})
 			return err
 		}
 	}
 	deleteNode2 := func(client clientset.Interface) func() error {
 		return func() error {
-			return client.Core().Nodes().Delete("node2", nil)
+			return client.CoreV1().Nodes().Delete("node2", nil)
 		}
 	}
 	createNode2NormalPodEviction := func(client clientset.Interface) func() error {
 		return func() error {
 			zero := int64(0)
-			return client.Policy().Evictions("ns").Evict(&policy.Eviction{
+			return client.PolicyV1beta1().Evictions("ns").Evict(&policy.Eviction{
 				TypeMeta: metav1.TypeMeta{
 					APIVersion: "policy/v1beta1",
 					Kind:       "Eviction",
@@ -318,7 +312,7 @@ func TestNodeAuthorizer(t *testing.T) {
 	createNode2MirrorPodEviction := func(client clientset.Interface) func() error {
 		return func() error {
 			zero := int64(0)
-			return client.Policy().Evictions("ns").Evict(&policy.Eviction{
+			return client.PolicyV1beta1().Evictions("ns").Evict(&policy.Eviction{
 				TypeMeta: metav1.TypeMeta{
 					APIVersion: "policy/v1beta1",
 					Kind:       "Eviction",
@@ -338,7 +332,7 @@ func TestNodeAuthorizer(t *testing.T) {
 			capacity++
 			statusString := fmt.Sprintf("{\"status\": {\"capacity\": {\"storage\": \"%dG\"}}}", capacity)
 			patchBytes := []byte(statusString)
-			_, err := client.Core().PersistentVolumeClaims("ns").Patch("mypvc", types.StrategicMergePatchType, patchBytes, "status")
+			_, err := client.CoreV1().PersistentVolumeClaims("ns").Patch("mypvc", types.StrategicMergePatchType, patchBytes, "status")
 			return err
 		}
 	}
@@ -346,14 +340,14 @@ func TestNodeAuthorizer(t *testing.T) {
 	updatePVCPhase := func(client clientset.Interface) func() error {
 		return func() error {
 			patchBytes := []byte(`{"status":{"phase": "Bound"}}`)
-			_, err := client.Core().PersistentVolumeClaims("ns").Patch("mypvc", types.StrategicMergePatchType, patchBytes, "status")
+			_, err := client.CoreV1().PersistentVolumeClaims("ns").Patch("mypvc", types.StrategicMergePatchType, patchBytes, "status")
 			return err
 		}
 	}
 
 	getNode1Lease := func(client clientset.Interface) func() error {
 		return func() error {
-			_, err := client.Coordination().Leases(api.NamespaceNodeLease).Get("node1", metav1.GetOptions{})
+			_, err := client.CoordinationV1().Leases(corev1.NamespaceNodeLease).Get("node1", metav1.GetOptions{})
 			return err
 		}
 	}
@@ -370,18 +364,18 @@ func TestNodeAuthorizer(t *testing.T) {
 					RenewTime:            &metav1.MicroTime{Time: time.Now()},
 				},
 			}
-			_, err := client.Coordination().Leases(api.NamespaceNodeLease).Create(lease)
+			_, err := client.CoordinationV1().Leases(corev1.NamespaceNodeLease).Create(lease)
 			return err
 		}
 	}
 	updateNode1Lease := func(client clientset.Interface) func() error {
 		return func() error {
-			lease, err := client.Coordination().Leases(api.NamespaceNodeLease).Get("node1", metav1.GetOptions{})
+			lease, err := client.CoordinationV1().Leases(corev1.NamespaceNodeLease).Get("node1", metav1.GetOptions{})
 			if err != nil {
 				return err
 			}
 			lease.Spec.RenewTime = &metav1.MicroTime{Time: time.Now()}
-			_, err = client.Coordination().Leases(api.NamespaceNodeLease).Update(lease)
+			_, err = client.CoordinationV1().Leases(corev1.NamespaceNodeLease).Update(lease)
 			return err
 		}
 	}
@@ -389,30 +383,30 @@ func TestNodeAuthorizer(t *testing.T) {
 		return func() error {
 			node1LeaseDurationSeconds++
 			bs := []byte(fmt.Sprintf(`{"spec": {"leaseDurationSeconds": %d}}`, node1LeaseDurationSeconds))
-			_, err := client.Coordination().Leases(api.NamespaceNodeLease).Patch("node1", types.StrategicMergePatchType, bs)
+			_, err := client.CoordinationV1().Leases(corev1.NamespaceNodeLease).Patch("node1", types.StrategicMergePatchType, bs)
 			return err
 		}
 	}
 	deleteNode1Lease := func(client clientset.Interface) func() error {
 		return func() error {
-			return client.Coordination().Leases(api.NamespaceNodeLease).Delete("node1", &metav1.DeleteOptions{})
+			return client.CoordinationV1().Leases(corev1.NamespaceNodeLease).Delete("node1", &metav1.DeleteOptions{})
 		}
 	}
 
-	getNode1CSINode := func(client externalclientset.Interface) func() error {
+	getNode1CSINode := func(client clientset.Interface) func() error {
 		return func() error {
-			_, err := client.StorageV1beta1().CSINodes().Get("node1", metav1.GetOptions{})
+			_, err := client.StorageV1().CSINodes().Get("node1", metav1.GetOptions{})
 			return err
 		}
 	}
-	createNode1CSINode := func(client externalclientset.Interface) func() error {
+	createNode1CSINode := func(client clientset.Interface) func() error {
 		return func() error {
-			nodeInfo := &storagev1beta1.CSINode{
+			nodeInfo := &storagev1.CSINode{
 				ObjectMeta: metav1.ObjectMeta{
 					Name: "node1",
 				},
-				Spec: storagev1beta1.CSINodeSpec{
-					Drivers: []storagev1beta1.CSINodeDriver{
+				Spec: storagev1.CSINodeSpec{
+					Drivers: []storagev1.CSINodeDriver{
 						{
 							Name:         "com.example.csi.driver1",
 							NodeID:       "com.example.csi/node1",
@@ -421,38 +415,38 @@ func TestNodeAuthorizer(t *testing.T) {
 					},
 				},
 			}
-			_, err := client.StorageV1beta1().CSINodes().Create(nodeInfo)
+			_, err := client.StorageV1().CSINodes().Create(nodeInfo)
 			return err
 		}
 	}
-	updateNode1CSINode := func(client externalclientset.Interface) func() error {
+	updateNode1CSINode := func(client clientset.Interface) func() error {
 		return func() error {
-			nodeInfo, err := client.StorageV1beta1().CSINodes().Get("node1", metav1.GetOptions{})
+			nodeInfo, err := client.StorageV1().CSINodes().Get("node1", metav1.GetOptions{})
 			if err != nil {
 				return err
 			}
-			nodeInfo.Spec.Drivers = []storagev1beta1.CSINodeDriver{
+			nodeInfo.Spec.Drivers = []storagev1.CSINodeDriver{
 				{
 					Name:         "com.example.csi.driver2",
 					NodeID:       "com.example.csi/node1",
 					TopologyKeys: []string{"com.example.csi/rack"},
 				},
 			}
-			_, err = client.StorageV1beta1().CSINodes().Update(nodeInfo)
+			_, err = client.StorageV1().CSINodes().Update(nodeInfo)
 			return err
 		}
 	}
-	patchNode1CSINode := func(client externalclientset.Interface) func() error {
+	patchNode1CSINode := func(client clientset.Interface) func() error {
 		return func() error {
 			bs := []byte(fmt.Sprintf(`{"csiDrivers": [ { "driver": "net.example.storage.driver2", "nodeID": "net.example.storage/node1", "topologyKeys": [ "net.example.storage/region" ] } ] }`))
 			// StrategicMergePatch is unsupported by CRs. Falling back to MergePatch
-			_, err := client.StorageV1beta1().CSINodes().Patch("node1", types.MergePatchType, bs)
+			_, err := client.StorageV1().CSINodes().Patch("node1", types.MergePatchType, bs)
 			return err
 		}
 	}
-	deleteNode1CSINode := func(client externalclientset.Interface) func() error {
+	deleteNode1CSINode := func(client clientset.Interface) func() error {
 		return func() error {
-			return client.StorageV1beta1().CSINodes().Delete("node1", &metav1.DeleteOptions{})
+			return client.StorageV1().CSINodes().Delete("node1", &metav1.DeleteOptions{})
 		}
 	}
 
@@ -563,12 +557,12 @@ func TestNodeAuthorizer(t *testing.T) {
 	expectAllowed(t, createNode2NormalPod(superuserClient))
 
 	// ExpandPersistentVolumes feature disabled
-	defer utilfeaturetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.ExpandPersistentVolumes, false)()
+	defer featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.ExpandPersistentVolumes, false)()
 	expectForbidden(t, updatePVCCapacity(node1Client))
 	expectForbidden(t, updatePVCCapacity(node2Client))
 
 	// ExpandPersistentVolumes feature enabled
-	defer utilfeaturetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.ExpandPersistentVolumes, true)()
+	defer featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.ExpandPersistentVolumes, true)()
 	expectForbidden(t, updatePVCCapacity(node1Client))
 	expectAllowed(t, updatePVCCapacity(node2Client))
 	expectForbidden(t, updatePVCPhase(node2Client))
@@ -671,7 +665,7 @@ func crdFromManifest(filename string) (*apiextensionsv1beta1.CustomResourceDefin
 		return nil, err
 	}
 
-	if err := runtime.DecodeInto(legacyscheme.Codecs.UniversalDecoder(), data, &crd); err != nil {
+	if err := runtime.DecodeInto(scheme.Codecs.UniversalDecoder(), data, &crd); err != nil {
 		return nil, err
 	}
 	return &crd, nil

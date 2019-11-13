@@ -22,19 +22,19 @@ import (
 	"strings"
 	"time"
 
-	"k8s.io/api/core/v1"
+	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apimachinery/pkg/watch"
-	restclient "k8s.io/client-go/rest"
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/util/flowcontrol"
 	"k8s.io/kubernetes/test/e2e/framework"
 	testutils "k8s.io/kubernetes/test/utils"
 	imageutils "k8s.io/kubernetes/test/utils/image"
 
-	. "github.com/onsi/ginkgo"
+	"github.com/onsi/ginkgo"
 )
 
 type durations []time.Duration
@@ -77,9 +77,12 @@ var _ = SIGDescribe("Service endpoints latency", func() {
 		)
 
 		// Turn off rate limiting--it interferes with our measurements.
-		oldThrottle := f.ClientSet.CoreV1().RESTClient().GetRateLimiter()
-		f.ClientSet.CoreV1().RESTClient().(*restclient.RESTClient).Throttle = flowcontrol.NewFakeAlwaysRateLimiter()
-		defer func() { f.ClientSet.CoreV1().RESTClient().(*restclient.RESTClient).Throttle = oldThrottle }()
+		cfg, err := framework.LoadConfig()
+		if err != nil {
+			framework.Failf("Unable to load config: %v", err)
+		}
+		cfg.RateLimiter = flowcontrol.NewFakeAlwaysRateLimiter()
+		f.ClientSet = kubernetes.NewForConfigOrDie(cfg)
 
 		failing := sets.NewString()
 		d, err := runServiceLatencies(f, parallelTrials, totalTrials, acceptableFailureRatio)
@@ -128,13 +131,12 @@ var _ = SIGDescribe("Service endpoints latency", func() {
 
 func runServiceLatencies(f *framework.Framework, inParallel, total int, acceptableFailureRatio float32) (output []time.Duration, err error) {
 	cfg := testutils.RCConfig{
-		Client:         f.ClientSet,
-		InternalClient: f.InternalClientset,
-		Image:          imageutils.GetPauseImageName(),
-		Name:           "svc-latency-rc",
-		Namespace:      f.Namespace.Name,
-		Replicas:       1,
-		PollInterval:   time.Second,
+		Client:       f.ClientSet,
+		Image:        imageutils.GetPauseImageName(),
+		Name:         "svc-latency-rc",
+		Namespace:    f.Namespace.Name,
+		Replicas:     1,
+		PollInterval: time.Second,
 	}
 	if err := framework.RunRC(cfg); err != nil {
 		return nil, err
@@ -161,7 +163,7 @@ func runServiceLatencies(f *framework.Framework, inParallel, total int, acceptab
 	blocker := make(chan struct{}, inParallel)
 	for i := 0; i < total; i++ {
 		go func() {
-			defer GinkgoRecover()
+			defer ginkgo.GinkgoRecover()
 			blocker <- struct{}{}
 			defer func() { <-blocker }()
 			if d, err := singleServiceLatency(f, cfg.Name, endpointQueries); err != nil {
@@ -177,7 +179,7 @@ func runServiceLatencies(f *framework.Framework, inParallel, total int, acceptab
 		select {
 		case e := <-errs:
 			framework.Logf("Got error: %v", e)
-			errCount += 1
+			errCount++
 		case d := <-durations:
 			output = append(output, d)
 		}

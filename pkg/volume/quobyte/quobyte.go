@@ -19,10 +19,10 @@ package quobyte
 import (
 	"fmt"
 	"os"
-	"path"
+	"path/filepath"
 	gostrings "strings"
 
-	"github.com/pborman/uuid"
+	"github.com/google/uuid"
 	"k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -237,12 +237,12 @@ func (mounter *quobyteMounter) CanMount() error {
 }
 
 // SetUp attaches the disk and bind mounts to the volume path.
-func (mounter *quobyteMounter) SetUp(fsGroup *int64) error {
+func (mounter *quobyteMounter) SetUp(mounterArgs volume.MounterArgs) error {
 	pluginDir := mounter.plugin.host.GetPluginDir(utilstrings.EscapeQualifiedName(quobytePluginName))
-	return mounter.SetUpAt(pluginDir, fsGroup)
+	return mounter.SetUpAt(pluginDir, mounterArgs)
 }
 
-func (mounter *quobyteMounter) SetUpAt(dir string, fsGroup *int64) error {
+func (mounter *quobyteMounter) SetUpAt(dir string, mounterArgs volume.MounterArgs) error {
 	// Check if Quobyte is already mounted on the host in the Plugin Dir
 	// if so we can use this mountpoint instead of creating a new one
 	// IsLikelyNotMountPoint wouldn't check the mount type
@@ -286,7 +286,7 @@ func (quobyteVolume *quobyte) GetPath() string {
 	// Quobyte has only one mount in the PluginDir where all Volumes are mounted
 	// The Quobyte client does a fixed-user mapping
 	pluginDir := quobyteVolume.plugin.host.GetPluginDir(utilstrings.EscapeQualifiedName(quobytePluginName))
-	return path.Join(pluginDir, fmt.Sprintf("%s#%s@%s", user, group, quobyteVolume.volume))
+	return filepath.Join(pluginDir, fmt.Sprintf("%s#%s@%s", user, group, quobyteVolume.volume))
 }
 
 type quobyteUnmounter struct {
@@ -408,7 +408,7 @@ func (provisioner *quobyteVolumeProvisioner) Provision(selectedNode *v1.Node, al
 	}
 
 	// create random image name
-	provisioner.volume = fmt.Sprintf("kubernetes-dynamic-pvc-%s", uuid.NewUUID())
+	provisioner.volume = fmt.Sprintf("kubernetes-dynamic-pvc-%s", uuid.New().String())
 
 	manager := &quobyteVolumeManager{
 		config: cfg,

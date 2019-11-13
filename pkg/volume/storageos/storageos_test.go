@@ -19,10 +19,10 @@ package storageos
 import (
 	"fmt"
 	"os"
-	"path"
+	"path/filepath"
 	"testing"
 
-	"k8s.io/api/core/v1"
+	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes/fake"
@@ -194,7 +194,7 @@ func TestPlugin(t *testing.T) {
 		t.Errorf("Couldn't get secret from %v/%v", pod.Namespace, secretName)
 	}
 
-	mounter, err := plug.(*storageosPlugin).newMounterInternal(volume.NewSpecFromVolume(spec), pod, apiCfg, fakeManager, &mount.FakeMounter{}, mount.NewFakeExec(nil))
+	mounter, err := plug.(*storageosPlugin).newMounterInternal(volume.NewSpecFromVolume(spec), pod, apiCfg, fakeManager, mount.NewFakeMounter(nil), mount.NewFakeExec(nil))
 	if err != nil {
 		t.Fatalf("Failed to make a new Mounter: %v", err)
 	}
@@ -202,13 +202,13 @@ func TestPlugin(t *testing.T) {
 		t.Fatalf("Got a nil Mounter")
 	}
 
-	expectedPath := path.Join(tmpDir, "pods/poduid/volumes/kubernetes.io~storageos/vol1-pvname.ns1.vol1")
+	expectedPath := filepath.Join(tmpDir, "pods/poduid/volumes/kubernetes.io~storageos/vol1-pvname.ns1.vol1")
 	volPath := mounter.GetPath()
 	if volPath != expectedPath {
 		t.Errorf("Expected path: '%s' got: '%s'", expectedPath, volPath)
 	}
 
-	if err := mounter.SetUp(nil); err != nil {
+	if err := mounter.SetUp(volume.MounterArgs{}); err != nil {
 		t.Errorf("Expected success, got: %v", err)
 	}
 	if _, err := os.Stat(volPath); err != nil {
@@ -231,7 +231,7 @@ func TestPlugin(t *testing.T) {
 
 	// Test Unmounter
 	fakeManager = &fakePDManager{}
-	unmounter, err := plug.(*storageosPlugin).newUnmounterInternal("vol1-pvname", types.UID("poduid"), fakeManager, &mount.FakeMounter{}, mount.NewFakeExec(nil))
+	unmounter, err := plug.(*storageosPlugin).newUnmounterInternal("vol1-pvname", types.UID("poduid"), fakeManager, mount.NewFakeMounter(nil), mount.NewFakeExec(nil))
 	if err != nil {
 		t.Errorf("Failed to make a new Unmounter: %v", err)
 	}
@@ -268,8 +268,9 @@ func TestPlugin(t *testing.T) {
 		// PVName: "test-volume-name",
 		PersistentVolumeReclaimPolicy: v1.PersistentVolumeReclaimDelete,
 		Parameters: map[string]string{
-			"VolumeNamespace": "test-volume-namespace",
-			"adminSecretName": secretName,
+			"VolumeNamespace":      "test-volume-namespace",
+			"adminSecretName":      secretName,
+			"adminsecretnamespace": "default",
 		},
 		MountOptions: mountOptions,
 	}
@@ -371,7 +372,7 @@ func TestPersistentClaimReadOnlyFlag(t *testing.T) {
 	fakeManager := &fakePDManager{}
 	fakeConfig := &fakeConfig{}
 	apiCfg := fakeConfig.GetAPIConfig()
-	mounter, err := plug.(*storageosPlugin).newMounterInternal(spec, pod, apiCfg, fakeManager, &mount.FakeMounter{}, mount.NewFakeExec(nil))
+	mounter, err := plug.(*storageosPlugin).newMounterInternal(spec, pod, apiCfg, fakeManager, mount.NewFakeMounter(nil), mount.NewFakeExec(nil))
 	if err != nil {
 		t.Fatalf("error creating a new internal mounter:%v", err)
 	}
