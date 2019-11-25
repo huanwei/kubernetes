@@ -24,8 +24,9 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	v1 "k8s.io/api/core/v1"
-	discovery "k8s.io/api/discovery/v1alpha1"
+	discovery "k8s.io/api/discovery/v1beta1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes/fake"
@@ -62,7 +63,7 @@ func newController(nodeNames []string) (*fake.Clientset, *endpointSliceControlle
 		informerFactory.Core().V1().Pods(),
 		informerFactory.Core().V1().Services(),
 		nodeInformer,
-		informerFactory.Discovery().V1alpha1().EndpointSlices(),
+		informerFactory.Discovery().V1beta1().EndpointSlices(),
 		int32(100),
 		client)
 
@@ -73,7 +74,7 @@ func newController(nodeNames []string) (*fake.Clientset, *endpointSliceControlle
 
 	return client, &endpointSliceController{
 		esController,
-		informerFactory.Discovery().V1alpha1().EndpointSlices().Informer().GetStore(),
+		informerFactory.Discovery().V1beta1().EndpointSlices().Informer().GetStore(),
 		informerFactory.Core().V1().Nodes().Informer().GetStore(),
 		informerFactory.Core().V1().Pods().Informer().GetStore(),
 		informerFactory.Core().V1().Services().Informer().GetStore(),
@@ -105,7 +106,7 @@ func TestSyncServiceWithSelector(t *testing.T) {
 	standardSyncService(t, esController, ns, serviceName, "true")
 	expectActions(t, client.Actions(), 1, "create", "endpointslices")
 
-	sliceList, err := client.DiscoveryV1alpha1().EndpointSlices(ns).List(metav1.ListOptions{})
+	sliceList, err := client.DiscoveryV1beta1().EndpointSlices(ns).List(metav1.ListOptions{})
 	assert.Nil(t, err, "Expected no error fetching endpoint slices")
 	assert.Len(t, sliceList.Items, 1, "Expected 1 endpoint slices")
 	slice := sliceList.Items[0]
@@ -172,7 +173,7 @@ func TestSyncServicePodSelection(t *testing.T) {
 	expectActions(t, client.Actions(), 1, "create", "endpointslices")
 
 	// an endpoint slice should be created, it should only reference pod1 (not pod2)
-	slices, err := client.DiscoveryV1alpha1().EndpointSlices(ns).List(metav1.ListOptions{})
+	slices, err := client.DiscoveryV1beta1().EndpointSlices(ns).List(metav1.ListOptions{})
 	assert.Nil(t, err, "Expected no error fetching endpoint slices")
 	assert.Len(t, slices.Items, 1, "Expected 1 endpoint slices")
 	slice := slices.Items[0]
@@ -198,6 +199,7 @@ func TestSyncServiceEndpointSliceLabelSelection(t *testing.T) {
 				discovery.LabelManagedBy:   controllerName,
 			},
 		},
+		AddressType: discovery.AddressTypeIPv4,
 	}, {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "matching-2",
@@ -207,6 +209,7 @@ func TestSyncServiceEndpointSliceLabelSelection(t *testing.T) {
 				discovery.LabelManagedBy:   controllerName,
 			},
 		},
+		AddressType: discovery.AddressTypeIPv4,
 	}, {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "partially-matching-1",
@@ -215,6 +218,7 @@ func TestSyncServiceEndpointSliceLabelSelection(t *testing.T) {
 				discovery.LabelServiceName: serviceName,
 			},
 		},
+		AddressType: discovery.AddressTypeIPv4,
 	}, {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "not-matching-1",
@@ -224,6 +228,7 @@ func TestSyncServiceEndpointSliceLabelSelection(t *testing.T) {
 				discovery.LabelManagedBy:   controllerName,
 			},
 		},
+		AddressType: discovery.AddressTypeIPv4,
 	}, {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "not-matching-2",
@@ -233,7 +238,10 @@ func TestSyncServiceEndpointSliceLabelSelection(t *testing.T) {
 				discovery.LabelManagedBy:   "something-else",
 			},
 		},
+		AddressType: discovery.AddressTypeIPv4,
 	}}
+
+	cmc := newCacheMutationCheck(endpointSlices)
 
 	// need to add them to both store and fake clientset
 	for _, endpointSlice := range endpointSlices {
@@ -241,7 +249,7 @@ func TestSyncServiceEndpointSliceLabelSelection(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Expected no error adding EndpointSlice: %v", err)
 		}
-		_, err = client.DiscoveryV1alpha1().EndpointSlices(ns).Create(endpointSlice)
+		_, err = client.DiscoveryV1beta1().EndpointSlices(ns).Create(endpointSlice)
 		if err != nil {
 			t.Fatalf("Expected no error creating EndpointSlice: %v", err)
 		}
@@ -251,20 +259,16 @@ func TestSyncServiceEndpointSliceLabelSelection(t *testing.T) {
 	numActionsBefore := len(client.Actions()) + 1
 	standardSyncService(t, esController, ns, serviceName, "false")
 
-	if len(client.Actions()) != numActionsBefore+5 {
-		t.Errorf("Expected 5 more actions, got %d", len(client.Actions())-numActionsBefore)
+	if len(client.Actions()) != numActionsBefore+2 {
+		t.Errorf("Expected 2 more actions, got %d", len(client.Actions())-numActionsBefore)
 	}
 
-	// endpointslice should have LabelsManagedBy set as part of update.
+	// only 2 slices should match, 2 should be deleted, 1 should be updated as a placeholder
 	expectAction(t, client.Actions(), numActionsBefore, "update", "endpointslices")
+	expectAction(t, client.Actions(), numActionsBefore+1, "delete", "endpointslices")
 
-	// service should have managedBySetupAnnotation set as part of update.
-	expectAction(t, client.Actions(), numActionsBefore+1, "update", "services")
-
-	// only 3 slices should match, 2 of those should be deleted, 1 should be updated as a placeholder
-	expectAction(t, client.Actions(), numActionsBefore+2, "update", "endpointslices")
-	expectAction(t, client.Actions(), numActionsBefore+3, "delete", "endpointslices")
-	expectAction(t, client.Actions(), numActionsBefore+4, "delete", "endpointslices")
+	// ensure cache mutation has not occurred
+	cmc.Check(t)
 }
 
 // Ensure SyncService handles a variety of protocols and IPs appropriately.
@@ -272,16 +276,13 @@ func TestSyncServiceFull(t *testing.T) {
 	client, esController := newController([]string{"node-1"})
 	namespace := metav1.NamespaceDefault
 	serviceName := "all-the-protocols"
+	ipv6Family := v1.IPv6Protocol
 
-	// pod 1 only uses PodIP status attr
 	pod1 := newPod(1, namespace, true, 0)
-	pod1.Status.PodIP = "1.2.3.4"
-	pod1.Status.PodIPs = []v1.PodIP{}
+	pod1.Status.PodIPs = []v1.PodIP{{IP: "1.2.3.4"}}
 	esController.podStore.Add(pod1)
 
-	// pod 2 only uses PodIPs status attr
 	pod2 := newPod(2, namespace, true, 0)
-	pod2.Status.PodIP = ""
 	pod2.Status.PodIPs = []v1.PodIP{{IP: "1.2.3.5"}, {IP: "1234::5678:0000:0000:9abc:def0"}}
 	esController.podStore.Add(pod2)
 
@@ -300,6 +301,7 @@ func TestSyncServiceFull(t *testing.T) {
 				{Name: "sctp-example", TargetPort: intstr.FromInt(3456), Protocol: v1.ProtocolSCTP},
 			},
 			Selector: map[string]string{"foo": "bar"},
+			IPFamily: &ipv6Family,
 		},
 	}
 	esController.serviceStore.Add(service)
@@ -312,139 +314,34 @@ func TestSyncServiceFull(t *testing.T) {
 
 	// last action should be to create endpoint slice
 	expectActions(t, client.Actions(), 1, "create", "endpointslices")
-	sliceList, err := client.DiscoveryV1alpha1().EndpointSlices(namespace).List(metav1.ListOptions{})
+	sliceList, err := client.DiscoveryV1beta1().EndpointSlices(namespace).List(metav1.ListOptions{})
 	assert.Nil(t, err, "Expected no error fetching endpoint slices")
 	assert.Len(t, sliceList.Items, 1, "Expected 1 endpoint slices")
 
 	// ensure all attributes of endpoint slice match expected state
 	slice := sliceList.Items[0]
-	assert.Len(t, slice.Endpoints, 2, "Expected 2 endpoints in first slice")
+	assert.Len(t, slice.Endpoints, 1, "Expected 1 endpoints in first slice")
 	assert.Equal(t, slice.Annotations["endpoints.kubernetes.io/last-change-trigger-time"], serviceCreateTime.Format(time.RFC3339Nano))
-	assert.ElementsMatch(t, []discovery.EndpointPort{{
-		Name:     strPtr("tcp-example"),
-		Protocol: protoPtr(v1.ProtocolTCP),
-		Port:     int32Ptr(int32(80)),
-	}, {
-		Name:     strPtr("udp-example"),
-		Protocol: protoPtr(v1.ProtocolUDP),
-		Port:     int32Ptr(int32(161)),
-	}, {
-		Name:     strPtr("sctp-example"),
+	assert.EqualValues(t, []discovery.EndpointPort{{
+		Name:     utilpointer.StringPtr("sctp-example"),
 		Protocol: protoPtr(v1.ProtocolSCTP),
-		Port:     int32Ptr(int32(3456)),
+		Port:     utilpointer.Int32Ptr(int32(3456)),
+	}, {
+		Name:     utilpointer.StringPtr("udp-example"),
+		Protocol: protoPtr(v1.ProtocolUDP),
+		Port:     utilpointer.Int32Ptr(int32(161)),
+	}, {
+		Name:     utilpointer.StringPtr("tcp-example"),
+		Protocol: protoPtr(v1.ProtocolTCP),
+		Port:     utilpointer.Int32Ptr(int32(80)),
 	}}, slice.Ports)
 
 	assert.ElementsMatch(t, []discovery.Endpoint{{
 		Conditions: discovery.EndpointConditions{Ready: utilpointer.BoolPtr(true)},
-		Addresses:  []string{"1.2.3.4"},
-		TargetRef:  &v1.ObjectReference{Kind: "Pod", Namespace: namespace, Name: pod1.Name},
-		Topology:   map[string]string{"kubernetes.io/hostname": "node-1"},
-	}, {
-		Conditions: discovery.EndpointConditions{Ready: utilpointer.BoolPtr(true)},
-		Addresses:  []string{"1.2.3.5", "1234::5678:0000:0000:9abc:def0"},
+		Addresses:  []string{"1234::5678:0000:0000:9abc:def0"},
 		TargetRef:  &v1.ObjectReference{Kind: "Pod", Namespace: namespace, Name: pod2.Name},
 		Topology:   map[string]string{"kubernetes.io/hostname": "node-1"},
 	}}, slice.Endpoints)
-}
-
-func TestEnsureSetupManagedByAnnotation(t *testing.T) {
-	serviceName := "testing-1"
-
-	testCases := map[string]struct {
-		serviceAnnotation   string
-		startingSliceLabels map[string]string
-		expectedSliceLabels map[string]string
-	}{
-		"already-labeled": {
-			serviceAnnotation: "foo",
-			startingSliceLabels: map[string]string{
-				discovery.LabelServiceName: serviceName,
-				discovery.LabelManagedBy:   controllerName,
-			},
-			expectedSliceLabels: map[string]string{
-				discovery.LabelServiceName: serviceName,
-				discovery.LabelManagedBy:   controllerName,
-			},
-		},
-		"already-annotated": {
-			serviceAnnotation: managedBySetupCompleteValue,
-			startingSliceLabels: map[string]string{
-				discovery.LabelServiceName: serviceName,
-				discovery.LabelManagedBy:   "other-controller",
-			},
-			expectedSliceLabels: map[string]string{
-				discovery.LabelServiceName: serviceName,
-				discovery.LabelManagedBy:   "other-controller",
-			},
-		},
-		"missing-and-extra-label": {
-			serviceAnnotation: "foo",
-			startingSliceLabels: map[string]string{
-				discovery.LabelServiceName: serviceName,
-				"foo":                      "bar",
-			},
-			expectedSliceLabels: map[string]string{
-				discovery.LabelServiceName: serviceName,
-				discovery.LabelManagedBy:   controllerName,
-				"foo":                      "bar",
-			},
-		},
-		"different-service": {
-			serviceAnnotation: "foo",
-			startingSliceLabels: map[string]string{
-				discovery.LabelServiceName: "something-else",
-			},
-			expectedSliceLabels: map[string]string{
-				discovery.LabelServiceName: "something-else",
-			},
-		},
-	}
-
-	for name, testCase := range testCases {
-		t.Run(name, func(t *testing.T) {
-			client, esController := newController([]string{"node-1"})
-			ns := metav1.NamespaceDefault
-			service := createService(t, esController, ns, serviceName, testCase.serviceAnnotation)
-
-			endpointSlice := &discovery.EndpointSlice{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "testing",
-					Namespace: ns,
-					Labels:    testCase.startingSliceLabels,
-				},
-			}
-
-			err := esController.endpointSliceStore.Add(endpointSlice)
-			if err != nil {
-				t.Fatalf("Expected no error adding EndpointSlice: %v", err)
-			}
-
-			_, err = client.DiscoveryV1alpha1().EndpointSlices(ns).Create(endpointSlice)
-			if err != nil {
-				t.Fatalf("Expected no error creating EndpointSlice: %v", err)
-			}
-
-			esController.ensureSetupManagedByAnnotation(service)
-
-			updatedService, err := client.CoreV1().Services(ns).Get(service.Name, metav1.GetOptions{})
-			if err != nil {
-				t.Fatalf("Expected no error getting Service: %v", err)
-			}
-
-			if updatedService.Annotations[managedBySetupAnnotation] != managedBySetupCompleteValue {
-				t.Errorf("Expected managedBySetupAnnotation: %+v, got: %+v", managedBySetupCompleteValue, updatedService.Annotations[managedBySetupAnnotation])
-			}
-
-			updatedSlice, err := client.DiscoveryV1alpha1().EndpointSlices(ns).Get(endpointSlice.Name, metav1.GetOptions{})
-			if err != nil {
-				t.Fatalf("Expected no error getting EndpointSlice: %v", err)
-			}
-
-			if !reflect.DeepEqual(updatedSlice.Labels, testCase.expectedSliceLabels) {
-				t.Errorf("Expected labels: %+v, got: %+v", updatedSlice.Labels, testCase.expectedSliceLabels)
-			}
-		})
-	}
 }
 
 // Test helpers
@@ -464,7 +361,6 @@ func createService(t *testing.T, esController *endpointSliceController, namespac
 			Name:              serviceName,
 			Namespace:         namespace,
 			CreationTimestamp: metav1.NewTime(time.Now()),
-			Annotations:       map[string]string{managedBySetupAnnotation: managedBySetup},
 		},
 		Spec: v1.ServiceSpec{
 			Ports:    []v1.ServicePort{{TargetPort: intstr.FromInt(80)}},
@@ -493,14 +389,49 @@ func expectAction(t *testing.T, actions []k8stesting.Action, index int, verb, re
 	}
 }
 
-func strPtr(str string) *string {
-	return &str
-}
-
+// protoPtr takes a Protocol and returns a pointer to it.
 func protoPtr(proto v1.Protocol) *v1.Protocol {
 	return &proto
 }
 
-func int32Ptr(num int32) *int32 {
-	return &num
+// cacheMutationCheck helps ensure that cached objects have not been changed
+// in any way throughout a test run.
+type cacheMutationCheck struct {
+	objects []cacheObject
+}
+
+// cacheObject stores a reference to an original object as well as a deep copy
+// of that object to track any mutations in the original object.
+type cacheObject struct {
+	original runtime.Object
+	deepCopy runtime.Object
+}
+
+// newCacheMutationCheck initializes a cacheMutationCheck with EndpointSlices.
+func newCacheMutationCheck(endpointSlices []*discovery.EndpointSlice) cacheMutationCheck {
+	cmc := cacheMutationCheck{}
+	for _, endpointSlice := range endpointSlices {
+		cmc.Add(endpointSlice)
+	}
+	return cmc
+}
+
+// Add appends a runtime.Object and a deep copy of that object into the
+// cacheMutationCheck.
+func (cmc *cacheMutationCheck) Add(o runtime.Object) {
+	cmc.objects = append(cmc.objects, cacheObject{
+		original: o,
+		deepCopy: o.DeepCopyObject(),
+	})
+}
+
+// Check verifies that no objects in the cacheMutationCheck have been mutated.
+func (cmc *cacheMutationCheck) Check(t *testing.T) {
+	for _, o := range cmc.objects {
+		if !reflect.DeepEqual(o.original, o.deepCopy) {
+			// Cached objects can't be safely mutated and instead should be deep
+			// copied before changed in any way.
+			t.Errorf("Cached object was unexpectedly mutated. Original: %+v, Mutated: %+v", o.deepCopy, o.original)
+		}
+	}
 }

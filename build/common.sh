@@ -94,8 +94,8 @@ readonly KUBE_CONTAINER_RSYNC_PORT=8730
 # $1 - server architecture
 kube::build::get_docker_wrapped_binaries() {
   local arch=$1
-  local debian_base_version=v1.0.0
-  local debian_iptables_version=v11.0.2
+  local debian_base_version=v2.0.0
+  local debian_iptables_version=v12.0.1
   ### If you change any of these lists, please also update DOCKERIZED_BINARIES
   ### in build/BUILD. And kube::golang::server_image_targets
   local targets=(
@@ -729,6 +729,8 @@ function kube::build::copy_output() {
     --prune-empty-dirs \
     --filter='- /_temp/' \
     --filter='+ /vendor/' \
+    --filter='+ /Godeps/' \
+    --filter='+ /staging/***/Godeps/**' \
     --filter='+ /_output/dockerized/bin/**' \
     --filter='+ zz_generated.*' \
     --filter='+ generated.proto' \

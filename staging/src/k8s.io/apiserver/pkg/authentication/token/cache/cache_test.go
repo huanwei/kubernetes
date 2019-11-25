@@ -30,7 +30,7 @@ import (
 )
 
 func TestSimpleCache(t *testing.T) {
-	testCache(newSimpleCache(4096, clock.RealClock{}), t)
+	testCache(newSimpleCache(clock.RealClock{}), t)
 }
 
 // Note: the performance profile of this benchmark may not match that in the production.
@@ -39,16 +39,16 @@ func TestSimpleCache(t *testing.T) {
 func BenchmarkCacheContentions(b *testing.B) {
 	for _, numKeys := range []int{1 << 8, 1 << 12, 1 << 16} {
 		b.Run(fmt.Sprintf("Simple/keys=%d", numKeys), func(b *testing.B) {
-			benchmarkCache(newSimpleCache(4096, clock.RealClock{}), b, numKeys)
+			benchmarkCache(newSimpleCache(clock.RealClock{}), b, numKeys)
 		})
 		b.Run(fmt.Sprintf("Striped/keys=%d", numKeys), func(b *testing.B) {
-			benchmarkCache(newStripedCache(32, fnvHashFunc, func() cache { return newSimpleCache(128, clock.RealClock{}) }), b, numKeys)
+			benchmarkCache(newStripedCache(32, fnvHashFunc, func() cache { return newSimpleCache(clock.RealClock{}) }), b, numKeys)
 		})
 	}
 }
 
 func TestStripedCache(t *testing.T) {
-	testCache(newStripedCache(32, fnvHashFunc, func() cache { return newSimpleCache(128, clock.RealClock{}) }), t)
+	testCache(newStripedCache(32, fnvHashFunc, func() cache { return newSimpleCache(clock.RealClock{}) }), t)
 }
 
 func benchmarkCache(cache cache, b *testing.B, numKeys int) {
