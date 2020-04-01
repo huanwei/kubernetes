@@ -17,6 +17,7 @@ limitations under the License.
 package upgrades
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
@@ -26,14 +27,13 @@ import (
 	"time"
 
 	"github.com/onsi/ginkgo"
-	"github.com/onsi/gomega"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/version"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/kubernetes/test/e2e/framework"
-	e2esset "k8s.io/kubernetes/test/e2e/framework/statefulset"
-	"k8s.io/kubernetes/test/e2e/framework/testfiles"
+	e2estatefulset "k8s.io/kubernetes/test/e2e/framework/statefulset"
+	e2etestfiles "k8s.io/kubernetes/test/e2e/framework/testfiles"
 )
 
 const mysqlManifestPath = "test/e2e/testing-manifests/statefulset/mysql-upgrade"
@@ -61,12 +61,12 @@ func (MySQLUpgradeTest) Skip(upgCtx UpgradeContext) bool {
 }
 
 func mysqlKubectlCreate(ns, file string) {
-	input := string(testfiles.ReadOrDie(filepath.Join(mysqlManifestPath, file)))
-	framework.RunKubectlOrDieInput(input, "create", "-f", "-", fmt.Sprintf("--namespace=%s", ns))
+	input := string(e2etestfiles.ReadOrDie(filepath.Join(mysqlManifestPath, file)))
+	framework.RunKubectlOrDieInput(ns, input, "create", "-f", "-", fmt.Sprintf("--namespace=%s", ns))
 }
 
 func (t *MySQLUpgradeTest) getServiceIP(f *framework.Framework, ns, svcName string) string {
-	svc, err := f.ClientSet.CoreV1().Services(ns).Get(svcName, metav1.GetOptions{})
+	svc, err := f.ClientSet.CoreV1().Services(ns).Get(context.TODO(), svcName, metav1.GetOptions{})
 	framework.ExpectNoError(err)
 	ingress := svc.Status.LoadBalancer.Ingress
 	if len(ingress) == 0 {
@@ -88,7 +88,7 @@ func (t *MySQLUpgradeTest) Setup(f *framework.Framework) {
 	mysqlKubectlCreate(ns, "configmap.yaml")
 
 	ginkgo.By("Creating a mysql StatefulSet")
-	e2esset.CreateStatefulSet(f.ClientSet, mysqlManifestPath, ns)
+	e2estatefulset.CreateStatefulSet(f.ClientSet, mysqlManifestPath, ns)
 
 	ginkgo.By("Creating a mysql-test-server deployment")
 	mysqlKubectlCreate(ns, "tester.yaml")
@@ -168,7 +168,7 @@ func (t *MySQLUpgradeTest) Test(f *framework.Framework, done <-chan struct{}, up
 func (t *MySQLUpgradeTest) Teardown(f *framework.Framework) {
 	count, err := t.countNames()
 	framework.ExpectNoError(err)
-	gomega.Expect(count >= t.successfulWrites).To(gomega.BeTrue())
+	framework.ExpectEqual(count >= t.successfulWrites, true)
 }
 
 // addName adds a new value to the db.

@@ -37,6 +37,7 @@ import (
 	info "github.com/google/cadvisor/info/v1"
 	"github.com/google/cadvisor/info/v2"
 	"github.com/google/cadvisor/machine"
+	"github.com/google/cadvisor/stats"
 	"github.com/google/cadvisor/utils/oomparser"
 	"github.com/google/cadvisor/utils/sysfs"
 	"github.com/google/cadvisor/version"
@@ -181,7 +182,7 @@ func New(memoryCache *memory.InMemoryCache, sysfs sysfs.SysFs, maxHousekeepingIn
 		containerWatchers:                     []watcher.ContainerWatcher{},
 		eventsChannel:                         eventsChannel,
 		collectorHttpClient:                   collectorHttpClient,
-		nvidiaManager:                         &accelerators.NvidiaManager{},
+		nvidiaManager:                         accelerators.NewNvidiaManager(),
 		rawContainerCgroupPathPrefixWhiteList: rawContainerCgroupPathPrefixWhiteList,
 	}
 
@@ -230,7 +231,7 @@ type manager struct {
 	containerWatchers        []watcher.ContainerWatcher
 	eventsChannel            chan watcher.ContainerEvent
 	collectorHttpClient      *http.Client
-	nvidiaManager            accelerators.AcceleratorManager
+	nvidiaManager            stats.Manager
 	// List of raw container cgroup path prefix whitelist.
 	rawContainerCgroupPathPrefixWhiteList []string
 }
@@ -918,13 +919,15 @@ func (m *manager) createContainerLocked(containerName string, watchSource watche
 	if err != nil {
 		return err
 	}
-	devicesCgroupPath, err := handler.GetCgroupPath("devices")
-	if err != nil {
-		klog.Warningf("Error getting devices cgroup path: %v", err)
-	} else {
-		cont.nvidiaCollector, err = m.nvidiaManager.GetCollector(devicesCgroupPath)
+	if !cgroups.IsCgroup2UnifiedMode() {
+		devicesCgroupPath, err := handler.GetCgroupPath("devices")
 		if err != nil {
-			klog.V(4).Infof("GPU metrics may be unavailable/incomplete for container %q: %v", cont.info.Name, err)
+			klog.Warningf("Error getting devices cgroup path: %v", err)
+		} else {
+			cont.nvidiaCollector, err = m.nvidiaManager.GetCollector(devicesCgroupPath)
+			if err != nil {
+				klog.V(4).Infof("GPU metrics may be unavailable/incomplete for container %q: %v", cont.info.Name, err)
+			}
 		}
 	}
 
@@ -1119,9 +1122,6 @@ func (self *manager) watchForNewContainers(quit chan error) error {
 				switch {
 				case event.EventType == watcher.ContainerAdd:
 					switch event.WatchSource {
-					// the Rkt and Raw watchers can race, and if Raw wins, we want Rkt to override and create a new handler for Rkt containers
-					case watcher.Rkt:
-						err = self.overrideContainer(event.Name, event.WatchSource)
 					default:
 						err = self.createContainer(event.Name, event.WatchSource)
 					}

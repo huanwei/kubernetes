@@ -1,4 +1,4 @@
-load("@io_bazel_rules_go//go:def.bzl", "go_library")
+load("@io_bazel_rules_go//go:def.bzl", "go_library", "go_test")
 
 go_library(
     name = "go_default_library",
@@ -34,7 +34,7 @@ go_library(
         "//staging/src/k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1:go_default_library",
         "//staging/src/k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1beta1:go_default_library",
         "//staging/src/k8s.io/apiextensions-apiserver/pkg/apiserver:go_default_library",
-        "//staging/src/k8s.io/apiextensions-apiserver/pkg/client/informers/internalversion:go_default_library",
+        "//staging/src/k8s.io/apiextensions-apiserver/pkg/client/informers/externalversions:go_default_library",
         "//staging/src/k8s.io/apiextensions-apiserver/pkg/cmd/server/options:go_default_library",
         "//staging/src/k8s.io/apimachinery/pkg/apis/meta/v1:go_default_library",
         "//staging/src/k8s.io/apimachinery/pkg/runtime:go_default_library",
@@ -49,13 +49,14 @@ go_library(
         "//staging/src/k8s.io/apiserver/pkg/endpoints/openapi:go_default_library",
         "//staging/src/k8s.io/apiserver/pkg/features:go_default_library",
         "//staging/src/k8s.io/apiserver/pkg/server:go_default_library",
+        "//staging/src/k8s.io/apiserver/pkg/server/egressselector:go_default_library",
         "//staging/src/k8s.io/apiserver/pkg/server/filters:go_default_library",
         "//staging/src/k8s.io/apiserver/pkg/server/healthz:go_default_library",
         "//staging/src/k8s.io/apiserver/pkg/server/options:go_default_library",
         "//staging/src/k8s.io/apiserver/pkg/server/storage:go_default_library",
         "//staging/src/k8s.io/apiserver/pkg/storage/etcd3/preflight:go_default_library",
         "//staging/src/k8s.io/apiserver/pkg/util/feature:go_default_library",
-        "//staging/src/k8s.io/apiserver/pkg/util/term:go_default_library",
+        "//staging/src/k8s.io/apiserver/pkg/util/flowcontrol:go_default_library",
         "//staging/src/k8s.io/apiserver/pkg/util/webhook:go_default_library",
         "//staging/src/k8s.io/client-go/informers:go_default_library",
         "//staging/src/k8s.io/client-go/kubernetes:go_default_library",
@@ -66,6 +67,7 @@ go_library(
         "//staging/src/k8s.io/component-base/cli/globalflag:go_default_library",
         "//staging/src/k8s.io/component-base/metrics:go_default_library",
         "//staging/src/k8s.io/component-base/metrics/prometheus/workqueue:go_default_library",
+        "//staging/src/k8s.io/component-base/term:go_default_library",
         "//staging/src/k8s.io/component-base/version:go_default_library",
         "//staging/src/k8s.io/component-base/version/verflag:go_default_library",
         "//staging/src/k8s.io/kube-aggregator/pkg/apis/apiregistration/v1:go_default_library",
@@ -98,4 +100,10 @@ filegroup(
     ],
     tags = ["automanaged"],
     visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "go_default_test",
+    srcs = ["server_test.go"],
+    embed = [":go_default_library"],
 )

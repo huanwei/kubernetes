@@ -24,7 +24,6 @@ go_library(
     importpath = "k8s.io/kubectl/pkg/cmd/create",
     visibility = ["//build/visible_to:pkg_kubectl_cmd_create_CONSUMERS"],
     deps = [
-        "//staging/src/k8s.io/api/apps/v1:go_default_library",
         "//staging/src/k8s.io/api/batch/v1:go_default_library",
         "//staging/src/k8s.io/api/batch/v1beta1:go_default_library",
         "//staging/src/k8s.io/api/core/v1:go_default_library",
@@ -80,7 +79,6 @@ go_test(
     data = ["//staging/src/k8s.io/kubectl/testdata"],
     embed = [":go_default_library"],
     deps = [
-        "//staging/src/k8s.io/api/apps/v1:go_default_library",
         "//staging/src/k8s.io/api/batch/v1:go_default_library",
         "//staging/src/k8s.io/api/batch/v1beta1:go_default_library",
         "//staging/src/k8s.io/api/core/v1:go_default_library",
@@ -96,6 +94,7 @@ go_test(
         "//staging/src/k8s.io/client-go/rest:go_default_library",
         "//staging/src/k8s.io/client-go/rest/fake:go_default_library",
         "//staging/src/k8s.io/kubectl/pkg/cmd/testing:go_default_library",
+        "//staging/src/k8s.io/kubectl/pkg/cmd/util:go_default_library",
         "//staging/src/k8s.io/kubectl/pkg/generate/versioned:go_default_library",
         "//staging/src/k8s.io/kubectl/pkg/scheme:go_default_library",
         "//vendor/github.com/stretchr/testify/assert:go_default_library",

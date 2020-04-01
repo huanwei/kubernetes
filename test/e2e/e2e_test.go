@@ -30,10 +30,10 @@ import (
 	// See https://github.com/kubernetes/kubernetes/issues/74827
 	// "github.com/onsi/ginkgo"
 
+	"k8s.io/component-base/version"
 	"k8s.io/kubernetes/test/e2e/framework"
 	"k8s.io/kubernetes/test/e2e/framework/config"
 	"k8s.io/kubernetes/test/e2e/framework/testfiles"
-	"k8s.io/kubernetes/test/e2e/framework/viperconfig"
 	"k8s.io/kubernetes/test/e2e/generated"
 	"k8s.io/kubernetes/test/utils/image"
 
@@ -69,13 +69,16 @@ func handleFlags() {
 }
 
 func TestMain(m *testing.M) {
+	var versionFlag bool
+	flag.CommandLine.BoolVar(&versionFlag, "version", false, "Displays version information.")
+
 	// Register test flags, then parse flags.
 	handleFlags()
 
 	// Now that we know which Viper config (if any) was chosen,
 	// parse it and update those options which weren't already set via command line flags
 	// (which have higher priority).
-	if err := viperconfig.ViperizeFlags(*viperConfig, "e2e", flag.CommandLine); err != nil {
+	if err := viperizeFlags(*viperConfig, "e2e", flag.CommandLine); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
@@ -84,6 +87,10 @@ func TestMain(m *testing.M) {
 		for _, v := range image.GetImageConfigs() {
 			fmt.Println(v.GetE2EImage())
 		}
+		os.Exit(0)
+	}
+	if versionFlag {
+		fmt.Printf("%s\n", version.Get())
 		os.Exit(0)
 	}
 

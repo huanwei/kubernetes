@@ -43,7 +43,6 @@ type BuiltInAuthenticationOptions struct {
 	BootstrapToken  *BootstrapTokenAuthenticationOptions
 	ClientCert      *genericoptions.ClientCertAuthenticationOptions
 	OIDC            *OIDCAuthenticationOptions
-	PasswordFile    *PasswordFileAuthenticationOptions
 	RequestHeader   *genericoptions.RequestHeaderAuthenticationOptions
 	ServiceAccounts *ServiceAccountAuthenticationOptions
 	TokenFile       *TokenFileAuthenticationOptions
@@ -73,14 +72,11 @@ type OIDCAuthenticationOptions struct {
 	RequiredClaims map[string]string
 }
 
-type PasswordFileAuthenticationOptions struct {
-	BasicAuthFile string
-}
-
 type ServiceAccountAuthenticationOptions struct {
 	KeyFiles      []string
 	Lookup        bool
 	Issuer        string
+	JWKSURI       string
 	MaxExpiration time.Duration
 }
 
@@ -107,7 +103,6 @@ func (s *BuiltInAuthenticationOptions) WithAll() *BuiltInAuthenticationOptions {
 		WithBootstrapToken().
 		WithClientCert().
 		WithOIDC().
-		WithPasswordFile().
 		WithRequestHeader().
 		WithServiceAccounts().
 		WithTokenFile().
@@ -131,11 +126,6 @@ func (s *BuiltInAuthenticationOptions) WithClientCert() *BuiltInAuthenticationOp
 
 func (s *BuiltInAuthenticationOptions) WithOIDC() *BuiltInAuthenticationOptions {
 	s.OIDC = &OIDCAuthenticationOptions{}
-	return s
-}
-
-func (s *BuiltInAuthenticationOptions) WithPasswordFile() *BuiltInAuthenticationOptions {
-	s.PasswordFile = &PasswordFileAuthenticationOptions{}
 	return s
 }
 
@@ -188,6 +178,22 @@ func (s *BuiltInAuthenticationOptions) Validate() []error {
 		}
 	}
 
+	if s.ServiceAccounts != nil {
+		if utilfeature.DefaultFeatureGate.Enabled(features.ServiceAccountIssuerDiscovery) {
+			// Validate the JWKS URI when it is explicitly set.
+			// When unset, it is later derived from ExternalHost.
+			if s.ServiceAccounts.JWKSURI != "" {
+				if u, err := url.Parse(s.ServiceAccounts.JWKSURI); err != nil {
+					allErrors = append(allErrors, fmt.Errorf("service-account-jwks-uri must be a valid URL: %v", err))
+				} else if u.Scheme != "https" {
+					allErrors = append(allErrors, fmt.Errorf("service-account-jwks-uri requires https scheme, parsed as: %v", u.String()))
+				}
+			}
+		} else if len(s.ServiceAccounts.JWKSURI) > 0 {
+			allErrors = append(allErrors, fmt.Errorf("service-account-jwks-uri may only be set when the ServiceAccountIssuerDiscovery feature gate is enabled"))
+		}
+	}
+
 	return allErrors
 }
 
@@ -196,7 +202,7 @@ func (s *BuiltInAuthenticationOptions) AddFlags(fs *pflag.FlagSet) {
 		"Identifiers of the API. The service account token authenticator will validate that "+
 		"tokens used against the API are bound to at least one of these audiences. If the "+
 		"--service-account-issuer flag is configured and this flag is not, this field "+
-		"defaults to a single element list containing the issuer URL .")
+		"defaults to a single element list containing the issuer URL.")
 
 	if s.Anonymous != nil {
 		fs.BoolVar(&s.Anonymous.Allow, "anonymous-auth", s.Anonymous.Allow, ""+
@@ -257,13 +263,6 @@ func (s *BuiltInAuthenticationOptions) AddFlags(fs *pflag.FlagSet) {
 			"Repeat this flag to specify multiple claims.")
 	}
 
-	if s.PasswordFile != nil {
-		fs.StringVar(&s.PasswordFile.BasicAuthFile, "basic-auth-file", s.PasswordFile.BasicAuthFile, ""+
-			"If set, the file that will be used to admit requests to the secure port of the API server "+
-			"via http basic authentication.")
-		fs.MarkDeprecated("basic-auth-file", "Basic authentication mode is deprecated and will be removed in a future release. It is not recommended for production environments.")
-	}
-
 	if s.RequestHeader != nil {
 		s.RequestHeader.AddFlags(fs)
 	}
@@ -281,7 +280,20 @@ func (s *BuiltInAuthenticationOptions) AddFlags(fs *pflag.FlagSet) {
 
 		fs.StringVar(&s.ServiceAccounts.Issuer, "service-account-issuer", s.ServiceAccounts.Issuer, ""+
 			"Identifier of the service account token issuer. The issuer will assert this identifier "+
-			"in \"iss\" claim of issued tokens. This value is a string or URI.")
+			"in \"iss\" claim of issued tokens. This value is a string or URI. If this option is not "+
+			"a valid URI per the OpenID Discovery 1.0 spec, the ServiceAccountIssuerDiscovery feature "+
+			"will remain disabled, even if the feature gate is set to true. It is highly recommended "+
+			"that this value comply with the OpenID spec: https://openid.net/specs/openid-connect-discovery-1_0.html. "+
+			"In practice, this means that service-account-issuer must be an https URL. It is also highly "+
+			"recommended that this URL be capable of serving OpenID discovery documents at "+
+			"`{service-account-issuer}/.well-known/openid-configuration`.")
+
+		fs.StringVar(&s.ServiceAccounts.JWKSURI, "service-account-jwks-uri", s.ServiceAccounts.JWKSURI, ""+
+			"Overrides the URI for the JSON Web Key Set in the discovery doc served at "+
+			"/.well-known/openid-configuration. This flag is useful if the discovery doc"+
+			"and key set are served to relying parties from a URL other than the "+
+			"API server's external (as auto-detected or overridden with external-hostname). "+
+			"Only valid if the ServiceAccountIssuerDiscovery feature gate is enabled.")
 
 		// Deprecated in 1.13
 		fs.StringSliceVar(&s.APIAudiences, "service-account-api-audiences", s.APIAudiences, ""+
@@ -345,10 +357,6 @@ func (s *BuiltInAuthenticationOptions) ToAuthenticationConfig() (kubeauthenticat
 		ret.OIDCUsernamePrefix = s.OIDC.UsernamePrefix
 		ret.OIDCSigningAlgs = s.OIDC.SigningAlgs
 		ret.OIDCRequiredClaims = s.OIDC.RequiredClaims
-	}
-
-	if s.PasswordFile != nil {
-		ret.BasicAuthFile = s.PasswordFile.BasicAuthFile
 	}
 
 	if s.RequestHeader != nil {
@@ -416,8 +424,6 @@ func (o *BuiltInAuthenticationOptions) ApplyTo(c *genericapiserver.Config) error
 			}
 		}
 	}
-
-	c.Authentication.SupportsBasicAuth = o.PasswordFile != nil && len(o.PasswordFile.BasicAuthFile) > 0
 
 	c.Authentication.APIAudiences = o.APIAudiences
 	if o.ServiceAccounts != nil && o.ServiceAccounts.Issuer != "" && len(o.APIAudiences) == 0 {
